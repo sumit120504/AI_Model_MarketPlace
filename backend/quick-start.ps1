@@ -1,103 +1,92 @@
-#!/bin/bash
+# quick-start.ps1 - Windows PowerShell Version (ASCII-safe)
 
-# Quick Start Script for Backend Compute Node
-
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║   Decentralized AI Marketplace - Backend Setup           ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo ""
+Write-Host "=============================================="
+Write-Host "   Decentralized AI Marketplace - Backend Setup"
+Write-Host "=============================================="
+Write-Host ""
 
 # Check Node.js
-if ! command -v node &> /dev/null; then
-    echo "❌ Node.js not found. Please install Node.js >= 16.x"
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host "[ERROR] Node.js not found. Please install Node.js >= 16.x"
     exit 1
-fi
-
-echo "✅ Node.js version: $(node --version)"
+}
+Write-Host "[OK] Node.js version: $(node --version)"
 
 # Check npm
-if ! command -v npm &> /dev/null; then
-    echo "❌ npm not found"
+if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Host "[ERROR] npm not found"
     exit 1
-fi
-
-echo "✅ npm version: $(npm --version)"
-echo ""
+}
+Write-Host "[OK] npm version: $(npm --version)"
+Write-Host ""
 
 # Install dependencies
-echo "📦 Installing dependencies..."
+Write-Host "[INFO] Installing dependencies..."
 npm install
-
-if [ $? -ne 0 ]; then
-    echo "❌ Failed to install dependencies"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] Failed to install dependencies"
     exit 1
-fi
-
-echo "✅ Dependencies installed"
-echo ""
+}
+Write-Host "[OK] Dependencies installed"
+Write-Host ""
 
 # Check .env file
-if [ ! -f .env ]; then
-    echo "⚠️  .env file not found"
-    echo "📝 Creating .env from template..."
-    cp .env.example .env
-    echo "✅ .env file created"
-    echo ""
-    echo "⚠️  IMPORTANT: Edit .env file with your configuration:"
-    echo "   - MODEL_REGISTRY_ADDRESS"
-    echo "   - INFERENCE_MARKET_ADDRESS"
-    echo "   - PRIVATE_KEY"
-    echo ""
-    echo "Run this script again after updating .env"
+if (-not (Test-Path ".env")) {
+    Write-Host "[WARNING] .env file not found"
+    Write-Host "[INFO] Creating .env from template..."
+    Copy-Item ".env.example" ".env"
+    Write-Host "[OK] .env file created"
+    Write-Host ""
+    Write-Host "[IMPORTANT] Edit .env file with your configuration:"
+    Write-Host "   - MODEL_REGISTRY_ADDRESS"
+    Write-Host "   - INFERENCE_MARKET_ADDRESS"
+    Write-Host "   - PRIVATE_KEY"
+    Write-Host ""
+    Write-Host "Run this script again after updating .env"
     exit 0
-fi
-
-echo "✅ .env file found"
-echo ""
+}
+Write-Host "[OK] .env file found"
+Write-Host ""
 
 # Create logs directory
-mkdir -p logs
-echo "✅ Logs directory created"
-echo ""
+if (-not (Test-Path "logs")) { 
+    New-Item -ItemType Directory -Path "logs" | Out-Null 
+}
+Write-Host "[OK] Logs directory created"
+Write-Host ""
 
 # Test spam detector
-echo "🧪 Testing Spam Detector..."
+Write-Host "[INFO] Testing Spam Detector..."
 npm run test:model
-
-if [ $? -ne 0 ]; then
-    echo "❌ Spam detector test failed"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] Spam detector test failed"
     exit 1
-fi
-
-echo ""
-echo "✅ All tests passed!"
-echo ""
+}
+Write-Host "[OK] All tests passed!"
+Write-Host ""
 
 # Final instructions
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║                  Setup Complete! ✅                       ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo ""
-echo "Next steps:"
-echo ""
-echo "1. Verify your .env configuration:"
-echo "   - Contract addresses are correct"
-echo "   - Private key is set"
-echo "   - Wallet is authorized in InferenceMarket"
-echo ""
-echo "2. Start the compute node:"
-echo "   npm start"
-echo ""
-echo "3. Or start in development mode (auto-restart):"
-echo "   npm run dev"
-echo ""
-echo "4. Check status at:"
-echo "   http://localhost:3001/status"
-echo ""
-echo "5. Monitor logs:"
-echo "   tail -f logs/compute-node.log"
-echo ""
-echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║   Ready to earn from AI inferences! 🚀                   ║"
-echo "╚═══════════════════════════════════════════════════════════╝"
-echo ""
+Write-Host "=============================================="
+Write-Host "Setup Complete!"
+Write-Host "=============================================="
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "1. Verify your .env configuration:"
+Write-Host "   - Contract addresses are correct"
+Write-Host "   - Private key is set"
+Write-Host "   - Wallet is authorized in InferenceMarket"
+Write-Host ""
+Write-Host "2. Start the compute node:"
+Write-Host "   npm start"
+Write-Host ""
+Write-Host "3. Or start in development mode (auto-restart):"
+Write-Host "   npm run dev"
+Write-Host ""
+Write-Host "4. Check status at:"
+Write-Host "   http://localhost:3001/status"
+Write-Host ""
+Write-Host "5. Monitor logs:"
+Write-Host "   Get-Content logs\compute-node.log -Wait"
+Write-Host ""
+Write-Host "Ready to earn from AI inferences!"
+Write-Host "=============================================="
