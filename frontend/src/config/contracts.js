@@ -1,21 +1,24 @@
 // Contract addresses (update with your deployed addresses)
 export const CONTRACTS = {
-  MODEL_REGISTRY: process.env.NEXT_PUBLIC_MODEL_REGISTRY_ADDRESS || "0x31bf20a858Ad971121DF5d6C0200bDe589c90D4a",
-  INFERENCE_MARKET: process.env.NEXT_PUBLIC_INFERENCE_MARKET_ADDRESS || "0xYourInferenceMarketAddress",
+  MODEL_REGISTRY: import.meta.env.VITE_MODEL_REGISTRY_ADDRESS || "0x31bf20a858Ad971121DF5d6C0200bDe589c90D4a",
+  INFERENCE_MARKET: import.meta.env.VITE_INFERENCE_MARKET_ADDRESS || "0xYourInferenceMarketAddress",
 };
 
 // Network configuration
 export const NETWORK = {
-  chainId: 80001,
-  name: "Mumbai Testnet",
-  rpcUrl: "https://rpc-mumbai.maticvigil.com",
-  blockExplorer: "https://mumbai.polygonscan.com",
+  chainId: parseInt(import.meta.env.VITE_CHAIN_ID) || 80001,
+  name: import.meta.env.VITE_CHAIN_NAME || "Mumbai Testnet",
+  rpcUrl: import.meta.env.VITE_RPC_URL || "https://rpc-mumbai.maticvigil.com",
+  blockExplorer: import.meta.env.VITE_BLOCK_EXPLORER || "https://mumbai.polygonscan.com",
   nativeCurrency: {
     name: "MATIC",
     symbol: "MATIC",
     decimals: 18
   }
 };
+
+// Backend API URL
+export const BACKEND_API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3001";
 
 // Contract ABIs (minimal - only functions we need)
 export const MODEL_REGISTRY_ABI = [

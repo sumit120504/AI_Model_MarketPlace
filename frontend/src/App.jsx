@@ -1,24 +1,26 @@
-// frontend/src/App.jsx
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { Web3Provider } from './context/Web3Context';
-import Layout from './components/Layout';
+import { useWeb3 } from './context/Web3Context';
+import Navbar from './components/layout/Navbar';
+import Home from './pages/Home';
 import Marketplace from './pages/Marketplace';
 import Dashboard from './pages/Dashboard';
-import MyModels from './pages/MyModels';
+import ModelDetails from './pages/ModelDetails';
 
 function App() {
   return (
-    <Web3Provider>
-      <Router>
-        <Layout>
+    <Router>
+      <div className="min-h-screen bg-gray-950">
+        <Navbar />
+        <main className="container mx-auto px-4 py-8">
           <Routes>
-            <Route path="/" element={<Marketplace />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/my-models" element={<MyModels />} />
+            <Route path="/model/:id" element={<ModelDetails />} />
           </Routes>
-        </Layout>
-      </Router>
-    </Web3Provider>
+        </main>
+      </div>
+    </Router>
   );
 }
 

@@ -1,277 +1,246 @@
-// frontend/src/pages/Dashboard.jsx
 import { useState, useEffect } from 'react';
 import { useWeb3 } from '../context/Web3Context';
-import { TrendingUp, Zap, DollarSign, Activity, Clock, CheckCircle } from 'lucide-react';
-import { ethers } from 'ethers';
+import { Loader2, History, Package } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { getStatusInfo } from '../config/contracts';
+import { formatDistance } from 'date-fns';
 
-export default function Dashboard() {
-  const { contracts, account } = useWeb3();
-  const [stats, setStats] = useState({
-    totalRequests: 0,
-    totalSpent: '0',
-    completedRequests: 0,
-    pendingRequests: 0
-  });
-  const [recentInferences, setRecentInferences] = useState([]);
+function Dashboard() {
+  const { account, isConnected, getUserRequests, getCreatorModels } = useWeb3();
+  
+  const [requests, setRequests] = useState([]);
+  const [myModels, setMyModels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('requests'); // 'requests' or 'models'
 
   useEffect(() => {
-    if (contracts.inferenceMarket && account) {
-      fetchDashboardData();
+    if (isConnected && account) {
+      loadDashboardData();
     }
-  }, [contracts.inferenceMarket, account]);
+  }, [isConnected, account]);
 
-  const fetchDashboardData = async () => {
+  async function loadDashboardData() {
     try {
       setLoading(true);
       
-      // Get total requests count
-      const requestCounter = await contracts.inferenceMarket.requestCounter();
-      const totalRequests = Number(requestCounter);
+      // Load user's inference requests
+      const userRequests = await getUserRequests(account);
+      setRequests(userRequests);
       
-      let userRequests = [];
-      let totalSpent = ethers.parseEther('0');
-      let completed = 0;
-      let pending = 0;
-
-      // Fetch user's requests (in production, use events/indexer)
-      for (let i = 1; i <= totalRequests; i++) {
-        try {
-          const request = await contracts.inferenceMarket.inferenceRequests(i);
-          
-          if (request.requester.toLowerCase() === account.toLowerCase()) {
-            userRequests.push({
-              id: i,
-              modelId: request.modelId,
-              payment: request.payment,
-              status: request.status,
-              timestamp: request.timestamp
-            });
-
-            totalSpent = totalSpent + request.payment;
-            
-            if (request.status === 3) { // Completed
-              completed++;
-            } else if (request.status === 1) { // Pending
-              pending++;
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching request ${i}:`, error);
-        }
-      }
-
-      setStats({
-        totalRequests: userRequests.length,
-        totalSpent: ethers.formatEther(totalSpent),
-        completedRequests: completed,
-        pendingRequests: pending
-      });
-
-      setRecentInferences(userRequests.slice(-10).reverse());
+      // Load user's models (if creator)
+      const creatorModels = await getCreatorModels(account);
+      setMyModels(creatorModels);
       
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('Error loading dashboard:', error);
+      toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const getStatusBadge = (status) => {
-    const statusMap = {
-      0: { text: 'Created', color: 'blue' },
-      1: { text: 'Pending', color: 'yellow' },
-      2: { text: 'Computing', color: 'purple' },
-      3: { text: 'Completed', color: 'green' },
-      4: { text: 'Refunded', color: 'red' }
-    };
-
-    const statusInfo = statusMap[status] || { text: 'Unknown', color: 'gray' };
-
+  if (!isConnected) {
     return (
-      <span className={`px-3 py-1 rounded-full text-xs font-medium border
-        ${statusInfo.color === 'green' ? 'bg-green-500/20 text-green-400 border-green-400/30' : ''}
-        ${statusInfo.color === 'yellow' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-400/30' : ''}
-        ${statusInfo.color === 'blue' ? 'bg-blue-500/20 text-blue-400 border-blue-400/30' : ''}
-        ${statusInfo.color === 'purple' ? 'bg-purple-500/20 text-purple-400 border-purple-400/30' : ''}
-        ${statusInfo.color === 'red' ? 'bg-red-500/20 text-red-400 border-red-400/30' : ''}
-        ${statusInfo.color === 'gray' ? 'bg-gray-500/20 text-gray-400 border-gray-400/30' : ''}
-      `}>
-        {statusInfo.text}
-      </span>
+      <div className="text-center py-20">
+        <h2 className="text-2xl font-bold mb-4">Connect Your Wallet</h2>
+        <p className="text-gray-400">
+          Please connect your wallet to view your dashboard
+        </p>
+      </div>
     );
-  };
+  }
 
-  const formatTimestamp = (timestamp) => {
-    const date = new Date(Number(timestamp) * 1000);
-    return date.toLocaleString();
-  };
-
-  if (!account) {
+  if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh]">
-        <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-12 border border-purple-500/30 text-center max-w-md">
-          <div className="w-20 h-20 bg-purple-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <Activity className="h-10 w-10 text-purple-400" />
-          </div>
-          <h2 className="text-2xl font-bold text-white mb-4">Connect Your Wallet</h2>
-          <p className="text-gray-400">
-            Please connect your wallet to view your dashboard and inference history.
-          </p>
-        </div>
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="h-8 w-8 animate-spin text-primary-500" />
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="max-w-7xl mx-auto space-y-8">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white mb-2">Dashboard</h1>
-        <p className="text-gray-400">Track your AI model usage and spending</p>
+      <div>
+        <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
+        <p className="text-gray-400">
+          View your inference requests and manage your models
+        </p>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        {/* Total Requests */}
-        <div className="bg-gradient-to-br from-purple-600/20 to-purple-800/20 rounded-xl p-6 border border-purple-500/30">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
-              <Zap className="h-6 w-6 text-purple-400" />
-            </div>
-            <TrendingUp className="h-5 w-5 text-purple-400" />
-          </div>
-          <h3 className="text-gray-400 text-sm font-medium mb-1">Total Requests</h3>
-          <p className="text-3xl font-bold text-white">{stats.totalRequests}</p>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="card">
+          <div className="text-gray-400 text-sm mb-2">Total Requests</div>
+          <div className="text-3xl font-bold">{requests.length}</div>
         </div>
-
-        {/* Total Spent */}
-        <div className="bg-gradient-to-br from-pink-600/20 to-pink-800/20 rounded-xl p-6 border border-pink-500/30">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-pink-500/20 rounded-lg flex items-center justify-center">
-              <DollarSign className="h-6 w-6 text-pink-400" />
-            </div>
-            <TrendingUp className="h-5 w-5 text-pink-400" />
-          </div>
-          <h3 className="text-gray-400 text-sm font-medium mb-1">Total Spent</h3>
-          <p className="text-3xl font-bold text-white">
-            {Number(stats.totalSpent).toFixed(4)} <span className="text-lg text-pink-300">ETH</span>
-          </p>
+        <div className="card">
+          <div className="text-gray-400 text-sm mb-2">My Models</div>
+          <div className="text-3xl font-bold">{myModels.length}</div>
         </div>
-
-        {/* Completed */}
-        <div className="bg-gradient-to-br from-green-600/20 to-green-800/20 rounded-xl p-6 border border-green-500/30">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
-              <CheckCircle className="h-6 w-6 text-green-400" />
-            </div>
-            <Activity className="h-5 w-5 text-green-400" />
+        <div className="card">
+          <div className="text-gray-400 text-sm mb-2">Total Spent</div>
+          <div className="text-3xl font-bold text-primary-400">
+            {requests.reduce((sum, req) => sum + parseFloat(req.payment), 0).toFixed(4)} MATIC
           </div>
-          <h3 className="text-gray-400 text-sm font-medium mb-1">Completed</h3>
-          <p className="text-3xl font-bold text-white">{stats.completedRequests}</p>
-        </div>
-
-        {/* Pending */}
-        <div className="bg-gradient-to-br from-yellow-600/20 to-yellow-800/20 rounded-xl p-6 border border-yellow-500/30">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-yellow-500/20 rounded-lg flex items-center justify-center">
-              <Clock className="h-6 w-6 text-yellow-400" />
-            </div>
-            <Activity className="h-5 w-5 text-yellow-400" />
-          </div>
-          <h3 className="text-gray-400 text-sm font-medium mb-1">Pending</h3>
-          <p className="text-3xl font-bold text-white">{stats.pendingRequests}</p>
         </div>
       </div>
 
-      {/* Recent Inferences */}
-      <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl border border-purple-500/30 overflow-hidden">
-        <div className="p-6 border-b border-purple-500/20">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-white mb-1">Recent Inferences</h2>
-              <p className="text-gray-400 text-sm">Your latest AI model requests</p>
-            </div>
-            <button
-              onClick={fetchDashboardData}
-              className="bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 px-4 py-2 rounded-lg border border-purple-400/30 transition-all flex items-center"
-            >
-              <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              Refresh
-            </button>
+      {/* Tabs */}
+      <div className="flex space-x-4 border-b border-gray-800">
+        <button
+          onClick={() => setActiveTab('requests')}
+          className={`pb-4 px-2 font-medium transition-colors relative ${
+            activeTab === 'requests'
+              ? 'text-primary-500'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            <History className="h-5 w-5" />
+            <span>My Requests</span>
           </div>
-        </div>
+          {activeTab === 'requests' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500" />
+          )}
+        </button>
+        
+        <button
+          onClick={() => setActiveTab('models')}
+          className={`pb-4 px-2 font-medium transition-colors relative ${
+            activeTab === 'models'
+              ? 'text-primary-500'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <div className="flex items-center space-x-2">
+            <Package className="h-5 w-5" />
+            <span>My Models</span>
+          </div>
+          {activeTab === 'models' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary-500" />
+          )}
+        </button>
+      </div>
 
-        {loading ? (
-          <div className="p-12 text-center">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-purple-400 mb-4"></div>
-            <p className="text-gray-400">Loading your data...</p>
-          </div>
-        ) : recentInferences.length === 0 ? (
-          <div className="p-12 text-center">
-            <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Zap className="h-8 w-8 text-gray-600" />
+      {/* Tab Content */}
+      {activeTab === 'requests' ? (
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold">Inference Requests</h2>
+          
+          {requests.length === 0 ? (
+            <div className="card text-center py-12">
+              <History className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+              <p className="text-gray-400">No inference requests yet</p>
+              <p className="text-sm text-gray-500 mt-2">
+                Visit the marketplace to use AI models
+              </p>
             </div>
-            <h3 className="text-xl font-semibold text-white mb-2">No Inferences Yet</h3>
-            <p className="text-gray-400 mb-6">Start using AI models from the marketplace!</p>
-            <a
-              href="/"
-              className="inline-block bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold px-6 py-3 rounded-lg transition-all"
-            >
-              Browse Models
-            </a>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-900/50">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Request ID
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Model ID
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Amount
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
-                    Date
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800">
-                {recentInferences.map((inference) => (
-                  <tr key={inference.id} className="hover:bg-gray-900/30 transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-purple-300 font-mono text-sm">#{inference.id}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-white font-medium">Model #{inference.modelId.toString()}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-white font-mono">
-                        {ethers.formatEther(inference.payment)} ETH
+          ) : (
+            <div className="space-y-4">
+              {requests.map((request) => {
+                const statusInfo = getStatusInfo(request.status);
+                return (
+                  <div key={request.id} className="card">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <span className="text-lg font-semibold">
+                            Request #{request.id}
+                          </span>
+                          <span className={`badge badge-${statusInfo.color}`}>
+                            {statusInfo.label}
+                          </span>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <div className="text-gray-400">Model ID</div>
+                            <div className="font-medium">#{request.modelId}</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400">Payment</div>
+                            <div className="font-medium">{request.payment} MATIC</div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400">Created</div>
+                            <div className="font-medium">
+                              {formatDistance(request.createdAt, new Date(), { addSuffix: true })}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-gray-400">Result Hash</div>
+                            <div className="font-mono text-xs">
+                              {request.resultHash === '0x0000000000000000000000000000000000000000000000000000000000000000'
+                                ? 'Pending...'
+                                : `${request.resultHash.substring(0, 10)}...`
+                              }
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold">My Models</h2>
+          
+          {myModels.length === 0 ? (
+            <div className="card text-center py-12">
+              <Package className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+              <p className="text-gray-400">No models registered yet</p>
+              <p className="text-sm text-gray-500 mt-2">
+                Register your first AI model to start earning
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {myModels.map((model) => (
+                <div key={model.id} className="card">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h3 className="text-xl font-semibold mb-1">{model.name}</h3>
+                      <span className={`badge ${model.isActive ? 'badge-success' : 'badge-error'}`}>
+                        {model.isActive ? 'Active' : 'Inactive'}
                       </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(inference.status)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-gray-400 text-sm">
-                      {formatTimestamp(inference.timestamp)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-gray-400 text-sm">Earnings</div>
+                      <div className="text-xl font-bold text-primary-400">
+                        {parseFloat(model.totalEarnings).toFixed(4)} MATIC
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <div className="text-gray-400">Uses</div>
+                      <div className="font-semibold">{model.totalInferences}</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-400">Price</div>
+                      <div className="font-semibold">{model.price} MATIC</div>
+                    </div>
+                    <div>
+                      <div className="text-gray-400">Reputation</div>
+                      <div className="font-semibold">
+                        {(parseInt(model.reputation) / 10).toFixed(1)}/100
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
+
+export default Dashboard;
