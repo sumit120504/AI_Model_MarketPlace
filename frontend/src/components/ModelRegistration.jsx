@@ -262,3 +262,4 @@ function ModelRegistration({ isOpen, onClose }) {
 }
 
 export default ModelRegistration;
+

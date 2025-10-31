@@ -57,9 +57,43 @@ class SpamDetector {
   /**
    * Set the path to the downloaded model file
    */
-  setModelPath(modelPath) {
-    this.modelPath = modelPath;
-    logger.info(`Model path set to: ${modelPath}`);
+  async setModelPath(modelPath) {
+    // Validate model file exists
+    try {
+      await fs.access(modelPath);
+      
+      // Test load the model to validate it
+      const options = {
+        mode: 'text',
+        pythonPath: this.pythonPath,
+        pythonOptions: ['-u'],
+        scriptPath: path.dirname(this.pythonScript),
+        args: [modelPath, '--metadata-only']
+      };
+
+      const result = await new Promise((resolve, reject) => {
+        PythonShell.run('run_model.py', options, (err, output) => {
+          if (err) reject(new Error(`Invalid model file: ${err.message}`));
+          try {
+            const metadata = JSON.parse(output[output.length - 1]);
+            if (!metadata.success) {
+              reject(new Error(metadata.error || 'Invalid model format'));
+            }
+            resolve(metadata);
+          } catch (e) {
+            reject(new Error(`Failed to validate model: ${e.message}`));
+          }
+        });
+      });
+      
+      this.modelPath = modelPath;
+      logger.info(`Model path set and validated: ${modelPath}`);
+      return result;
+      
+    } catch (error) {
+      logger.error(`Failed to set model path: ${error.message}`);
+      throw error;
+    }
   }
   
   /**

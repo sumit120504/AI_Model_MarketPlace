@@ -36,10 +36,18 @@ def load_model(model_path):
 
 def predict_spam(text, model_path):
     try:
-        # Input validation
+        # Input validation and size limits
         if not text or not isinstance(text, str):
             return json.dumps({
                 'error': 'Invalid input: text must be a non-empty string',
+                'success': False
+            })
+        
+        # Limit input size to prevent memory issues (100KB)
+        MAX_INPUT_SIZE = 100 * 1024
+        if len(text.encode('utf-8')) > MAX_INPUT_SIZE:
+            return json.dumps({
+                'error': f'Input text too large: maximum size is {MAX_INPUT_SIZE} bytes',
                 'success': False
             })
             

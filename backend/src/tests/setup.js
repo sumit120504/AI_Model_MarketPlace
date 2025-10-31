@@ -13,3 +13,4 @@ global.console = {
 
 // Set test timeout
 jest.setTimeout(10000);
+

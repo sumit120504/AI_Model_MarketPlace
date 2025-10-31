@@ -62,31 +62,44 @@ function ModelDetails() {
     }
   }
 
-  function startPolling(requestId) {
+  async function startPolling(requestId) {
+    const MAX_ATTEMPTS = 30; // 30 x 2 seconds = 1 minute max
+    let attempts = 0;
+    
     const interval = setInterval(async () => {
       try {
-        // In a real implementation, you would poll the blockchain or backend API
-        // For now, we'll simulate the result after a delay
-        const elapsed = Date.now() - (window.requestStartTime || Date.now());
+        attempts++;
+        const request = await inferenceMarket.getRequest(requestId);
         
-        if (elapsed > 5000) { // 5 seconds
+        // Check if request is completed
+        if (request.status === 2) { // Completed
           clearInterval(interval);
           setPollingInterval(null);
-          
-          // Simulate result based on input content
-          const isSpam = inputText.toLowerCase().includes('free') || 
-                        inputText.toLowerCase().includes('win') ||
-                        inputText.toLowerCase().includes('congratulations') ||
-                        inputText.toLowerCase().includes('$$$');
-          
-          setResult({
-            requestId,
-            result: isSpam ? 'SPAM' : 'NOT_SPAM',
-            confidence: isSpam ? 0.95 : 0.87
-          });
           setProcessing(false);
           
+          // Get result from blockchain
+          const resultData = request.resultData;
+          setResult({
+            requestId,
+            result: resultData.result,
+            confidence: resultData.confidence
+          });
+          
           toast.success('Inference completed!');
+        }
+        // Check if request failed
+        else if (request.status === 3) { // Failed
+          clearInterval(interval);
+          setPollingInterval(null);
+          setProcessing(false);
+          toast.error('Inference failed: ' + (request.errorMessage || 'Unknown error'));
+        }
+        // Stop polling after max attempts
+        else if (attempts >= MAX_ATTEMPTS) {
+          clearInterval(interval);
+          setPollingInterval(null);
+          setProcessing(false);
+          toast.error('Request timed out. Please try again.');
         }
       } catch (error) {
         console.error('Error polling for result:', error);

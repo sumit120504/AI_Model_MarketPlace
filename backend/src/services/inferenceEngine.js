@@ -119,13 +119,36 @@ class InferenceEngine {
       
       // Step 4: Download model from IPFS and set it in SpamDetector
       logger.info(`Downloading model from IPFS: ${model.ipfsHash}`);
-      const modelPath = path.join(process.cwd(), 'models', 'downloaded', `${model.modelId}.pkl`);
-      await this.ipfsService.downloadFile(model.ipfsHash, modelPath);
-      logger.info(`Model downloaded to: ${modelPath}`);
       
-      // Set the model path in SpamDetector
-      this.spamDetector.setModelPath(modelPath);
-      logger.info('Model path set in SpamDetector');
+      // Ensure models directory exists
+      const modelsDir = path.join(process.cwd(), 'models', 'downloaded');
+      await fs.promises.mkdir(modelsDir, { recursive: true });
+      
+      const modelPath = path.join(modelsDir, `${model.modelId}.pkl`);
+      
+      try {
+        await this.ipfsService.downloadFile(model.ipfsHash, modelPath);
+        logger.info(`Model downloaded to: ${modelPath}`);
+        
+        // Verify the downloaded file exists and has content
+        const stats = await fs.promises.stat(modelPath);
+        if (stats.size === 0) {
+          throw new Error('Downloaded model file is empty');
+        }
+        
+        // Set the model path in SpamDetector
+        await this.spamDetector.setModelPath(modelPath);
+        logger.info('Model path set in SpamDetector');
+      } catch (error) {
+        logger.error(`Failed to download or validate model: ${error.message}`);
+        // Cleanup failed download
+        try {
+          await fs.promises.unlink(modelPath);
+        } catch (unlinkError) {
+          logger.warn(`Failed to cleanup invalid model file: ${unlinkError.message}`);
+        }
+        throw new Error(`Model download failed: ${error.message}`);
+      }
       
       // Step 5: Get input data from IPFS
       const inputText = await this.getInputData(requestDetails.inputDataHash);
