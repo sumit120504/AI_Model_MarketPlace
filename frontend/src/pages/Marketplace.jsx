@@ -2,26 +2,64 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useWeb3 } from '../context/Web3Context';
 import { Search, Star, TrendingUp, Loader2 } from 'lucide-react';
+import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import { getCategoryName } from '../config/contracts';
 
 function Marketplace() {
-  const { isConnected, getActiveModels } = useWeb3();
+  const { 
+    isConnected, 
+    getActiveModels, 
+    isAdmin, 
+    modelRegistry,
+    isCorrectNetwork 
+  } = useWeb3();
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
 
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && isCorrectNetwork && modelRegistry) {
       loadModels();
+    } else if (isConnected && !isCorrectNetwork) {
+      setError('Please switch to the correct network');
+      setLoading(false);
+    } else if (!isConnected) {
+      setError('Please connect your wallet');
+      setLoading(false);
+    } else if (!modelRegistry) {
+      setError('Contract not initialized. Please check your connection and try again.');
+      setLoading(false);
     }
-  }, [isConnected]);
+  }, [isConnected, isCorrectNetwork, modelRegistry]);
 
   async function loadModels() {
     try {
       setLoading(true);
-      const activeModels = await getActiveModels();
-      setModels(activeModels);
+      let loadedModels;
+      if (isAdmin) {
+        // Admin can see all models
+        const modelIds = await modelRegistry.getAllModels();
+        loadedModels = await Promise.all(modelIds.map(id => modelRegistry.getModel(id)));
+        loadedModels = loadedModels.map(model => ({
+          id: model.modelId.toString(),
+          creator: model.creator,
+          ipfsHash: model.ipfsHash,
+          name: model.name,
+          description: model.description,
+          category: model.category,
+          price: ethers.utils.formatEther(model.pricePerInference),
+          totalInferences: model.totalInferences.toString(),
+          reputation: model.reputationScore.toString(),
+          isActive: model.isActive
+        }));
+      } else {
+        // Regular users only see active models
+        loadedModels = await getActiveModels();
+      }
+      setModels(loadedModels);
     } catch (error) {
       console.error('Error loading models:', error);
       toast.error('Failed to load models');
@@ -30,10 +68,12 @@ function Marketplace() {
     }
   }
 
-  const filteredModels = models.filter(model =>
-    model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    model.description.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredModels = models
+    .filter(model => 
+      (showInactive || model.isActive || isAdmin) && // Show inactive models only to admin when toggled
+      (model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+       model.description.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
 
   if (!isConnected) {
     return (
@@ -58,13 +98,26 @@ function Marketplace() {
         </div>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search models..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="input pl-10 w-full md:w-80"
-          />
+          <div className="flex gap-4 items-center">
+            <input
+              type="text"
+              placeholder="Search models..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="input pl-10 w-full md:w-80"
+            />
+            {isAdmin && (
+              <label className="flex items-center space-x-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={showInactive}
+                  onChange={(e) => setShowInactive(e.target.checked)}
+                  className="checkbox"
+                />
+                <span>Show Inactive Models</span>
+              </label>
+            )}
+          </div>
         </div>
       </div>
 

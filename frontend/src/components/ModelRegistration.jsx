@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { useWeb3 } from '../context/Web3Context';
 import { X, Upload, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { BACKEND_API_URL } from '../config/contracts';
 
 function ModelRegistration({ isOpen, onClose }) {
   const { registerModel } = useWeb3();
@@ -24,10 +25,10 @@ function ModelRegistration({ isOpen, onClose }) {
     if (!file) return;
     setIsUploading(true);
     try {
-      // Adjust the endpoint as needed for your backend
+      // Upload to backend upload endpoint
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch('/api/upload-model', {
+      const res = await fetch(`${BACKEND_API_URL}/api/upload-model`, {
         method: 'POST',
         body: formData,
       });
@@ -82,6 +83,7 @@ function ModelRegistration({ isOpen, onClose }) {
     try {
       setIsSubmitting(true);
       
+      // Call web3 context to register with user's wallet
       const modelId = await registerModel(
         formData.ipfsHash,
         formData.name,
@@ -246,7 +248,7 @@ function ModelRegistration({ isOpen, onClose }) {
                 <input
                   type="file"
                   accept=".pt,.pth,.onnx,.h5,.joblib,.pkl,.zip,.tar,.gz,.pb,.tflite,.bin,.model,.sav,.pkl,.pickle,.txt,.json"
-                  className="input"
+                  className="hidden"
                   style={{ maxWidth: 220 }}
                   ref={fileInputRef}
                   onChange={handleFileUpload}

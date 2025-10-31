@@ -14,6 +14,7 @@ export function Web3Provider({ children }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isCorrectNetwork, setIsCorrectNetwork] = useState(false);
   const [balance, setBalance] = useState("0");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Initialize provider and check connection
   useEffect(() => {
@@ -43,6 +44,9 @@ export function Web3Provider({ children }) {
       return;
     }
 
+    // Clear any existing state
+    disconnectWallet();
+
     try {
       // Request account access
       const provider = new ethers.providers.Web3Provider(window.ethereum);
@@ -57,7 +61,12 @@ export function Web3Provider({ children }) {
       
       if (!correctNetwork) {
         toast.error(`Please switch to ${NETWORK.name}`);
-        await switchNetwork();
+        try {
+          await switchNetwork();
+        } catch (error) {
+          console.error('Failed to switch network:', error);
+          return;
+        }
         return;
       }
 
@@ -65,28 +74,90 @@ export function Web3Provider({ children }) {
       const balance = await provider.getBalance(address);
       const balanceInEth = ethers.utils.formatEther(balance);
 
-      // Initialize contracts
-      const registryContract = new ethers.Contract(
-        CONTRACTS.MODEL_REGISTRY,
-        MODEL_REGISTRY_ABI,
-        signer
-      );
-
-      const marketContract = new ethers.Contract(
-        CONTRACTS.INFERENCE_MARKET,
-        INFERENCE_MARKET_ABI,
-        signer
-      );
-
-      // Update state
+      // Initialize contracts and state
+      let registryContract, marketContract, isAdminUser = false, isOwner = false;
+      
+      // First update basic connection state
       setAccount(address);
       setProvider(provider);
       setSigner(signer);
-      setModelRegistry(registryContract);
-      setInferenceMarket(marketContract);
       setIsConnected(true);
       setIsCorrectNetwork(correctNetwork);
       setBalance(balanceInEth);
+
+      try {
+        console.log('Initializing contracts with addresses:', CONTRACTS);
+        
+        if (!CONTRACTS.MODEL_REGISTRY) {
+          throw new Error('Model Registry contract address not configured');
+        }
+
+        console.log('Creating ModelRegistry contract instance...');
+        registryContract = new ethers.Contract(
+          CONTRACTS.MODEL_REGISTRY,
+          MODEL_REGISTRY_ABI,
+          signer
+        );
+
+        // Basic contract validation
+        console.log('Validating ModelRegistry contract...');
+        await registryContract.deployed();
+        
+        if (!CONTRACTS.INFERENCE_MARKET) {
+          throw new Error('Inference Market contract address not configured');
+        }
+
+        console.log('Creating InferenceMarket contract instance...');
+        marketContract = new ethers.Contract(
+          CONTRACTS.INFERENCE_MARKET,
+          INFERENCE_MARKET_ABI,
+          signer
+        );
+
+        console.log('Validating InferenceMarket contract...');
+        await marketContract.deployed();
+
+        // Check if address is admin - catch errors if functions don't exist
+        try {
+          console.log('Checking admin status for address:', address);
+          isAdminUser = await registryContract.isAdmin(address);
+          const ownerAddress = await registryContract.owner();
+          isOwner = ownerAddress.toLowerCase() === address.toLowerCase();
+          console.log('Admin check result:', { isAdminUser, isOwner });
+        } catch (e) {
+          console.warn('Admin check failed (this is normal for non-admin users):', e.message);
+          // Continue without admin privileges
+        }
+      
+        // Update contract and admin state
+        setModelRegistry(registryContract);
+        setInferenceMarket(marketContract);
+        setIsAdmin(isAdminUser || isOwner);
+
+        console.log('Contract initialization successful');
+        toast.success('Contracts initialized successfully');
+
+      } catch (contractError) {
+        console.error('Error initializing contracts:', {
+          message: contractError.message,
+          code: contractError.code,
+          data: contractError.data,
+          method: contractError?.method,
+        });
+        
+        if (contractError.message.includes('call revert exception')) {
+          toast.error('Contract verification failed. Please check if contracts are deployed correctly.');
+        } else if (contractError.message.includes('network changed')) {
+          toast.error('Network changed during connection. Please try again.');
+        } else {
+          toast.error('Failed to initialize contracts. Please check network and contract addresses.');
+        }
+        
+        // Keep the wallet connected but with no contract access
+        setModelRegistry(null);
+        setInferenceMarket(null);
+        setIsAdmin(false);
+      }
 
       toast.success('Wallet connected!');
 
@@ -214,26 +285,39 @@ export function Web3Provider({ children }) {
   const contractHelpers = {
     // Get all active models
     async getActiveModels() {
+      if (!modelRegistry) {
+        throw new Error('Contract not initialized');
+      }
+
       try {
+        console.log('Fetching active models...');
         const modelIds = await modelRegistry.getActiveModels();
+        console.log('Found model IDs:', modelIds.toString());
+        
         const models = [];
         
         for (const id of modelIds) {
-          const model = await modelRegistry.getModel(id);
-          models.push({
-            id: model.modelId.toString(),
-            creator: model.creator,
-            ipfsHash: model.ipfsHash,
-            name: model.name,
-            description: model.description,
-            category: model.category,
-            price: ethers.utils.formatEther(model.pricePerInference),
-            totalInferences: model.totalInferences.toString(),
-            reputation: model.reputationScore.toString(),
-            isActive: model.isActive
-          });
+          try {
+            const model = await modelRegistry.getModel(id);
+            models.push({
+              id: model.modelId.toString(),
+              creator: model.creator,
+              ipfsHash: model.ipfsHash,
+              name: model.name,
+              description: model.description,
+              category: model.category,
+              price: ethers.utils.formatEther(model.pricePerInference),
+              totalInferences: model.totalInferences.toString(),
+              reputation: model.reputationScore.toString(),
+              isActive: model.isActive
+            });
+          } catch (modelError) {
+            console.error(`Error fetching model ${id}:`, modelError);
+            // Continue with other models
+          }
         }
         
+        console.log('Fetched models:', models);
         return models;
       } catch (error) {
         console.error('Error getting active models:', error);
@@ -455,6 +539,7 @@ export function Web3Provider({ children }) {
     inferenceMarket,
     isConnected,
     isCorrectNetwork,
+    isAdmin,
     balance,
     connectWallet,
     disconnectWallet,

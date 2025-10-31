@@ -8,6 +8,7 @@ import { config } from '../config/config.js';
 import { getInferenceEngine } from '../services/inferenceEngine.js';
 import { getBlockchainService } from '../services/blockchainService.js';
 import ipfsService from '../services/ipfsService.js';
+import { ethers } from 'ethers';
 import logger from '../utils/logger.js';
 
 class APIServer {
@@ -51,7 +52,14 @@ class APIServer {
     });
     
   // File upload middleware (for model uploads)
-  this.upload = multer({ dest: path.join(process.cwd(), 'uploads/') });
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  // Ensure uploads directory exists
+  try {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  } catch (err) {
+    logger.warn('Could not create uploads directory:', err.message);
+  }
+  this.upload = multer({ dest: uploadsDir });
 
   // Routes
   this.setupRoutes();
@@ -197,6 +205,76 @@ class APIServer {
         const hash = await this.ipfsService.uploadFile(content, filename || 'file');
         res.json({ hash, gateway: config.ipfsGateway });
       } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Register model endpoint (accepts either an uploaded file or an existing IPFS hash)
+    // Expects multipart/form-data with optional 'file' and fields: name, description, category, price, stake, ipfsHash
+    this.app.post('/api/register-model', this.upload.single('file'), async (req, res) => {
+      try {
+        const { name, description, category, price, stake } = req.body || {};
+        let { ipfsHash } = req.body || {};
+
+        if (req.file) {
+          // initialize ipfs if needed
+          if (!this.ipfsService.isInitialized) {
+            await this.ipfsService.initialize();
+          }
+          const filePath = req.file.path;
+          ipfsHash = await this.ipfsService.uploadFile(filePath);
+          // remove temp file
+          fs.unlink(filePath, () => {});
+        }
+
+        if (!ipfsHash) {
+          return res.status(400).json({ error: 'IPFS hash or file upload required' });
+        }
+
+        if (!name || !description || typeof category === 'undefined' || !price || !stake) {
+          return res.status(400).json({ error: 'Missing required model fields' });
+        }
+
+        // Ensure blockchain service initialized
+        if (!this.blockchain) this.blockchain = getBlockchainService();
+        await this.blockchain.initialize();
+
+        const priceInWei = ethers.utils.parseEther(price.toString());
+        const stakeInWei = ethers.utils.parseEther(stake.toString());
+
+        // Prepare unsigned transaction
+        const unsignedTx = await this.blockchain.modelRegistry.populateTransaction.registerModel(
+          ipfsHash,
+          name,
+          description,
+          parseInt(category, 10),
+          priceInWei,
+          { value: stakeInWei }
+        );
+
+        // Execute transaction with retry logic provided by blockchain service
+        const receipt = await this.blockchain.executeWithRetry(async (gasSettings) => {
+          const tx = await this.blockchain.wallet.sendTransaction({
+            ...unsignedTx,
+            ...gasSettings,
+            value: stakeInWei
+          });
+
+          logger.logTransaction && logger.logTransaction(tx.hash, 'Register model (via API)');
+
+          const timeoutMs = 3 * 60 * 1000; // 3 minutes
+          const receipt = await this.blockchain.provider.waitForTransaction(tx.hash, 1, timeoutMs);
+          if (!receipt) throw new Error(`Timed out waiting for tx ${tx.hash}`);
+          return receipt;
+        });
+
+        // Extract modelId from events
+        const event = receipt.events?.find(e => e.event === 'ModelRegistered');
+        const modelId = event ? event.args.modelId.toString() : null;
+
+        res.json({ success: true, modelId, txHash: receipt.transactionHash });
+      } catch (error) {
+        logger.error('Register model API failed:', error);
         res.status(500).json({ error: error.message });
       }
     });

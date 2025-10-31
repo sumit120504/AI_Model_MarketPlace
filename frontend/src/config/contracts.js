@@ -6,10 +6,10 @@ export const CONTRACTS = {
 
 // Network configuration
 export const NETWORK = {
-  chainId: parseInt(import.meta.env.VITE_CHAIN_ID, 10) || 80001,
-  name: import.meta.env.VITE_CHAIN_NAME || "Mumbai Testnet",
-  rpcUrl: import.meta.env.VITE_RPC_URL || "https://rpc-mumbai.maticvigil.com",
-  blockExplorer: import.meta.env.VITE_BLOCK_EXPLORER || "https://mumbai.polygonscan.com",
+  chainId: parseInt(import.meta.env.VITE_CHAIN_ID, 10) || 80002,
+  name: import.meta.env.VITE_CHAIN_NAME || "Amoy",
+  rpcUrl: import.meta.env.VITE_RPC_URL || "https://rpc-amoy.polygon.technology",
+  blockExplorer: import.meta.env.VITE_BLOCK_EXPLORER || "https://amoy.polygonscan.com",
   nativeCurrency: {
     name: "MATIC",
     symbol: "MATIC",
@@ -29,7 +29,13 @@ export const MODEL_REGISTRY_ABI = [
   "function getCreatorModels(address _creator) external view returns (uint256[] memory)",
   "function updatePrice(uint256 _modelId, uint256 _newPrice) external",
   "function deactivateModel(uint256 _modelId) external",
-  "function activateModel(uint256 _modelId) external"
+  "function activateModel(uint256 _modelId) external",
+  // Admin functions
+  "function owner() external view returns (address)",
+  "function isAdmin(address _address) external view returns (bool)",
+  "function addAdmin(address _admin) external",
+  "function removeAdmin(address _admin) external",
+  "function getAllModels() external view returns (uint256[] memory)"
 ];
 
 export const INFERENCE_MARKET_ABI = [

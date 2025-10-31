@@ -7,7 +7,7 @@ import { formatDistance } from 'date-fns';
 import ModelRegistration from '../components/ModelRegistration';
 
 function Dashboard() {
-  const { account, isConnected, getUserRequests, getCreatorModels } = useWeb3();
+  const { account, isConnected, getUserRequests, getCreatorModels, isAdmin, modelRegistry } = useWeb3();
   
   const [requests, setRequests] = useState([]);
   const [myModels, setMyModels] = useState([]);
@@ -18,6 +18,11 @@ function Dashboard() {
   useEffect(() => {
     if (isConnected && account) {
       loadDashboardData();
+    } else {
+      // Reset state when disconnected
+      setRequests([]);
+      setMyModels([]);
+      setLoading(false);
     }
   }, [isConnected, account]);
 
@@ -25,14 +30,31 @@ function Dashboard() {
     try {
       setLoading(true);
       
-      // Load user's inference requests
-      const userRequests = await getUserRequests(account);
-      setRequests(userRequests);
+      // Load data in parallel
+      const promises = [
+        getUserRequests(account),
+        isAdmin ? modelRegistry.getAllModels().then(ids => 
+          Promise.all(ids.map(id => modelRegistry.getModel(id)))
+        ) : getCreatorModels(account)
+      ];
       
-      // Load user's models (if creator)
-      const creatorModels = await getCreatorModels(account);
-      setMyModels(creatorModels);
+      const [userRequests, creatorModels] = await Promise.allSettled(promises);
       
+      // Handle requests
+      if (userRequests.status === 'fulfilled') {
+        setRequests(userRequests.value || []);
+      } else {
+        console.error('Error loading requests:', userRequests.reason);
+        toast.error('Failed to load inference requests');
+      }
+      
+      // Handle models
+      if (creatorModels.status === 'fulfilled') {
+        setMyModels(creatorModels.value || []);
+      } else {
+        console.error('Error loading models:', creatorModels.reason);
+        toast.error('Failed to load creator models');
+      }
     } catch (error) {
       console.error('Error loading dashboard:', error);
       toast.error('Failed to load dashboard data');
