@@ -28,6 +28,14 @@ class InferenceEngine {
     try {
       logger.info('Initializing Inference Engine...');
       
+      // Create models download directory if it doesn't exist
+      const fs = await import('fs');
+      const path = await import('path');
+      const modelsDir = './models/downloaded';
+      if (!fs.existsSync(modelsDir)) {
+        fs.mkdirSync(modelsDir, { recursive: true });
+      }
+      
       // Initialize blockchain service
       this.blockchain = getBlockchainService();
       await this.blockchain.initialize();
@@ -104,21 +112,41 @@ class InferenceEngine {
       // Step 2: Get request details
       const requestDetails = await this.blockchain.getRequest(requestId);
       
-      // Step 3: Get model details
+      // Step 3: Get model details and download model
       const model = await this.blockchain.getModel(requestDetails.modelId);
       logger.info(`Using model: ${model.name} (ID: ${model.modelId})`);
       
-      // Step 4: Get input data
-      // In MVP, we'll use dummy text. In production, fetch from IPFS or user input
+      // Step 4: Download model from IPFS
+      logger.info(`Downloading model from IPFS: ${model.ipfsHash}`);
+      const modelPath = `./models/downloaded/${model.modelId}`;
+      await this.ipfsService.downloadFile(model.ipfsHash, modelPath);
+      
+      // Step 5: Get input data from IPFS
       const inputText = await this.getInputData(requestDetails.inputDataHash);
       
-      // Step 5: Run AI inference
+      // Step 6: Run AI inference
       logger.logInference(requestId, 'Running AI model...');
-      const result = await this.spamDetector.detectSpam(inputText);
+      let result;
+      let success = false;
       
-      // Step 6: Submit result to blockchain
+      try {
+        result = await this.spamDetector.detectSpam(inputText);
+        success = true;
+      } catch (inferenceError) {
+        logger.error(`Inference failed: ${inferenceError.message}`);
+        // User can request refund via the contract's requestRefund function
+        throw inferenceError;
+      }
+      
+      // Step 7: Submit result to blockchain (this will automatically trigger payment)
       logger.logInference(requestId, 'Submitting result', { result: result.result });
-      await this.blockchain.submitResult(requestId, result.result);
+      const submitResponse = await this.blockchain.submitResult(requestId, result.result);
+      
+      if (submitResponse.paymentProcessed) {
+        logger.info(`Result submitted and payment processed successfully for request #${requestId}`);
+      } else {
+        logger.warn(`Result submitted but payment confirmation not received for request #${requestId}`);
+      }
       
       // Update stats
       this.stats.successful++;
@@ -133,9 +161,10 @@ class InferenceEngine {
     } catch (error) {
       logger.error(`Failed to process request #${requestId}:`, error);
       
-      // Report failure to blockchain
+      // Report failure (user can request refund)
       try {
         await this.blockchain.reportFailure(requestId, error.message.substring(0, 100));
+        logger.info(`Failure reported for request #${requestId}, user can request refund`);
       } catch (reportError) {
         logger.error(`Failed to report failure for #${requestId}:`, reportError);
       }

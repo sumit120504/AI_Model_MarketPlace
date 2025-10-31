@@ -57,8 +57,8 @@ class RequestIndexer {
       });
     });
 
-    // Listen for request pickup
-    this.blockchain.inferenceMarket.on('RequestPickedUp', (requestId, computeNode, event) => {
+    // Listen for request pickup (InferenceComputing event)
+    this.blockchain.inferenceMarket.on('InferenceComputing', (requestId, computeNode, event) => {
       logger.info(`🔄 Request picked up: #${requestId.toString()}`);
       this.pendingRequests.delete(requestId.toString());
       this.cache.set(`request_${requestId}`, {
