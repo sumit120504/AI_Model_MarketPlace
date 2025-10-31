@@ -1,5 +1,5 @@
 import { getBlockchainService } from './blockchainService.js';
-import { getSpamDetector } from '../models/spamDetector.js';
+import { getModelRunner } from '../models/modelRunner.js';
 import { getRequestIndexer } from './requestIndexer.js';
 import ipfsService from './ipfsService.js';
 import logger from '../utils/logger.js';
@@ -9,7 +9,7 @@ import path from 'path';
 class InferenceEngine {
   constructor() {
     this.blockchain = null;
-    this.spamDetector = null;
+    this.modelRunner = null;
     this.requestIndexer = null;
     this.ipfsService = null;
     this.processing = new Map(); // Track requests being processed
@@ -50,9 +50,9 @@ class InferenceEngine {
       this.ipfsService = ipfsService;
       await this.ipfsService.initialize();
       
-      // Initialize AI model
-      this.spamDetector = getSpamDetector();
-      await this.spamDetector.initialize();
+      // Initialize model runner
+      this.modelRunner = getModelRunner();
+      await this.modelRunner.initialize();
       
       logger.info('✅ Inference Engine initialized');
       
@@ -136,9 +136,9 @@ class InferenceEngine {
           throw new Error('Downloaded model file is empty');
         }
         
-        // Set the model path in SpamDetector
-        await this.spamDetector.setModelPath(modelPath);
-        logger.info('Model path set in SpamDetector');
+        // Set the model path in ModelRunner
+        await this.modelRunner.setModelPath(modelPath, model);
+        logger.info('Model loaded successfully');
       } catch (error) {
         logger.error(`Failed to download or validate model: ${error.message}`);
         // Cleanup failed download
@@ -159,7 +159,7 @@ class InferenceEngine {
       let success = false;
       
       try {
-        result = await this.spamDetector.detectSpam(inputText);
+        result = await this.modelRunner.runInference(inputText);
         success = true;
       } catch (inferenceError) {
         logger.error(`Inference failed: ${inferenceError.message}`);

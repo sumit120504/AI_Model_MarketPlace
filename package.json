@@ -1,5 +1,25 @@
 {
+  "name": "ai-model-marketplace",
+  "version": "1.0.0",
+  "description": "Decentralized AI Model Marketplace",
+  "scripts": {
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev": "concurrently \"cd backend && npm run dev\" \"cd frontend && npm run dev\"",
+    "start": "concurrently \"cd backend && npm start\" \"cd frontend && npm run preview\"",
+    "build": "cd frontend && npm run build"
+  },
+  "keywords": [
+    "ai",
+    "blockchain",
+    "marketplace",
+    "web3"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
     "python-shell": "^5.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
   }
 }

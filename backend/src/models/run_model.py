@@ -1,134 +1,189 @@
 import sys
-import pickle
 import json
-import os
-from sklearn.feature_extraction.text import TfidfVectorizer
+import traceback
+from pathlib import Path
+import torch
+import tensorflow as tf
+import pickle
 import numpy as np
+from typing import Any, Dict, Union
 
-def load_model(model_path):
+def load_model(model_path: str, model_type: str) -> Any:
+    """Load model based on type and file extension"""
     try:
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-        with open(model_path, 'rb') as f:
-            model_dict = pickle.load(f)
-            
-        # Validate model structure
-        required_keys = ['model', 'vectorizer', 'metadata']
-        missing_keys = [key for key in required_keys if key not in model_dict]
-        if missing_keys:
-            raise ValueError(f"Invalid model file: missing {', '.join(missing_keys)}")
-            
-        # Extract model components
-        classifier = model_dict['model']
-        vectorizer = model_dict['vectorizer']
-        metadata = model_dict.get('metadata', {})
+        ext = Path(model_path).suffix.lower()
         
-        # Validate component types
-        if not hasattr(classifier, 'predict') or not hasattr(classifier, 'predict_proba'):
-            raise ValueError("Invalid model: missing required methods")
-        if not hasattr(vectorizer, 'transform'):
-            raise ValueError("Invalid vectorizer: missing transform method")
+        if ext == '.pt' or ext == '.pth':
+            model = torch.load(model_path)
+            model.eval()  # Set to inference mode
+            return model
             
-        return classifier, vectorizer, metadata
+        elif ext == '.h5' or ext == '.keras':
+            return tf.keras.models.load_model(model_path)
+            
+        elif ext == '.pkl' or ext == '.pickle':
+            with open(model_path, 'rb') as f:
+                return pickle.load(f)
+                
+        elif ext == '.onnx':
+            import onnxruntime as ort
+            return ort.InferenceSession(model_path)
+            
+        else:
+            raise ValueError(f"Unsupported model format: {ext}")
+            
     except Exception as e:
-        return None, None, {'error': str(e)}
+        raise Exception(f"Failed to load model: {str(e)}")
 
-def predict_spam(text, model_path):
+def preprocess_input(input_data: Union[str, Dict, list], model_type: str, config: Dict) -> Any:
+    """Preprocess input data based on model type"""
     try:
-        # Input validation and size limits
-        if not text or not isinstance(text, str):
-            return json.dumps({
-                'error': 'Invalid input: text must be a non-empty string',
-                'success': False
-            })
-        
-        # Limit input size to prevent memory issues (100KB)
-        MAX_INPUT_SIZE = 100 * 1024
-        if len(text.encode('utf-8')) > MAX_INPUT_SIZE:
-            return json.dumps({
-                'error': f'Input text too large: maximum size is {MAX_INPUT_SIZE} bytes',
-                'success': False
-            })
+        if model_type == 'text_classification':
+            # Convert text to format expected by model
+            if isinstance(input_data, str):
+                return input_data
+            elif isinstance(input_data, dict) and 'text' in input_data:
+                return input_data['text']
+                
+        elif model_type == 'image_classification':
+            # Load and preprocess image data
+            import cv2
+            import base64
             
-        # Load model and vectorizer
-        classifier, vectorizer, metadata = load_model(model_path)
-        if classifier is None or vectorizer is None:
-            return json.dumps({
-                'error': metadata.get('error', 'Failed to load model'),
-                'success': False
-            })
+            if isinstance(input_data, str) and input_data.startswith('data:image'):
+                # Handle base64 image
+                img_data = base64.b64decode(input_data.split(',')[1])
+                nparr = np.frombuffer(img_data, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            else:
+                raise ValueError("Invalid image data format")
+                
+            # Resize and normalize
+            target_size = config.get('input_size', (224, 224))
+            img = cv2.resize(img, target_size)
+            img = img.astype(np.float32) / 255.0
+            return img
+            
+        elif model_type == 'regression':
+            # Convert numeric features
+            return np.array(input_data, dtype=np.float32)
+            
+        else:
+            # Pass through for unknown types
+            return input_data
+            
+    except Exception as e:
+        raise Exception(f"Failed to preprocess input: {str(e)}")
 
-        # Preprocess and transform input text
-        text = text.strip()
-        try:
-            X = vectorizer.transform([text])
-        except Exception as e:
-            return json.dumps({
-                'error': f'Text vectorization failed: {str(e)}',
-                'success': False
-            })
-        
-        # Make prediction with error handling
-        try:
-            prediction = classifier.predict(X)[0]
-            probabilities = classifier.predict_proba(X)[0]
+def run_inference(model: Any, preprocessed_input: Any, model_type: str) -> Dict:
+    """Run inference with loaded model"""
+    try:
+        if isinstance(model, torch.nn.Module):
+            with torch.no_grad():
+                input_tensor = torch.tensor(preprocessed_input)
+                output = model(input_tensor)
+                return output.numpy().tolist()
+                
+        elif isinstance(model, tf.keras.Model):
+            output = model.predict(preprocessed_input)
+            return output.tolist()
             
-            # Get confidence scores for both classes
-            spam_confidence = float(probabilities[1]) if prediction else float(probabilities[0])
-            not_spam_confidence = float(probabilities[0]) if prediction else float(probabilities[1])
-        except Exception as e:
-            return json.dumps({
-                'error': f'Prediction failed: {str(e)}',
-                'success': False
-            })
+        elif hasattr(model, 'predict'):
+            # scikit-learn style
+            output = model.predict(preprocessed_input)
+            return output.tolist() if isinstance(output, np.ndarray) else output
+            
+        elif hasattr(model, 'run'):
+            # ONNX model
+            output = model.run(None, {'input': preprocessed_input})
+            return output[0].tolist()
+            
+        else:
+            raise ValueError("Unsupported model type")
+            
+    except Exception as e:
+        raise Exception(f"Inference failed: {str(e)}")
+
+def postprocess_output(output: Any, model_type: str, config: Dict) -> Dict:
+    """Postprocess model output based on type"""
+    try:
+        if model_type == 'text_classification':
+            # Convert classification output to labels if provided
+            labels = config.get('labels', [])
+            if isinstance(output, (list, np.ndarray)):
+                probs = output if len(output) == len(labels) else output[0]
+                label_idx = np.argmax(probs)
+                return {
+                    'label': labels[label_idx] if labels else str(label_idx),
+                    'confidence': float(probs[label_idx]),
+                    'probabilities': {
+                        label: float(prob) 
+                        for label, prob in zip(labels or range(len(probs)), probs)
+                    }
+                }
+                
+        elif model_type == 'image_classification':
+            # Similar to text classification
+            return postprocess_output(output, 'text_classification', config)
+            
+        elif model_type == 'regression':
+            # Return numeric predictions
+            return {
+                'prediction': float(output[0]) if isinstance(output, (list, np.ndarray)) else float(output)
+            }
+            
+        else:
+            # Default to returning raw output
+            return {'output': output}
+            
+    except Exception as e:
+        raise Exception(f"Failed to postprocess output: {str(e)}")
+
+def main():
+    try:
+        if len(sys.argv) != 3:
+            raise ValueError("Expected model_path and input_json arguments")
+            
+        model_path = sys.argv[1]
+        input_json = json.loads(sys.argv[2])
         
+        # Extract input data and metadata
+        input_data = input_json['input']
+        model_type = input_json['modelType']
+        model_config = input_json['modelConfig']
+        
+        # Load model
+        model = load_model(model_path, model_type)
+        
+        # Preprocess
+        preprocessed_input = preprocess_input(input_data, model_type, model_config)
+        
+        # Run inference
+        raw_output = run_inference(model, preprocessed_input, model_type)
+        
+        # Postprocess
+        processed_output = postprocess_output(raw_output, model_type, model_config)
+        
+        # Return results
         result = {
             'success': True,
-            'isSpam': bool(prediction),
-            'confidence': spam_confidence,
-            'result': 'SPAM' if prediction else 'NOT_SPAM',
-            'details': {
-                'spam_confidence': spam_confidence,
-                'not_spam_confidence': not_spam_confidence,
-                'input_length': len(text),
-                'model_metadata': metadata
+            'output': processed_output,
+            'metadata': {
+                'model_type': model_type,
+                'input_shape': np.array(preprocessed_input).shape if hasattr(preprocessed_input, 'shape') else None
             }
         }
         
-        return json.dumps(result)
+        print(json.dumps(result))
         
     except Exception as e:
-        return json.dumps({
-            'error': f'Unexpected error: {str(e)}',
-            'success': False
-        })
-
-def get_model_metadata(model_path):
-    """Get model metadata without running inference"""
-    try:
-        _, _, metadata = load_model(model_path)
-        return json.dumps({
-            'success': True,
-            'details': {
-                'model_metadata': metadata
-            }
-        })
-    except Exception as e:
-        return json.dumps({
-            'error': f'Failed to get model metadata: {str(e)}',
-            'success': False
-        })
+        error_result = {
+            'success': False,
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }
+        print(json.dumps(error_result))
+        sys.exit(1)
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print(json.dumps({'error': 'Missing arguments', 'success': False}))
-        sys.exit(1)
-        
-    model_path = sys.argv[1]
-    
-    if len(sys.argv) == 2 or sys.argv[2] == '--metadata-only':
-        print(get_model_metadata(model_path))
-    else:
-        text = sys.argv[2]
-        print(predict_spam(text, model_path))
+    main()

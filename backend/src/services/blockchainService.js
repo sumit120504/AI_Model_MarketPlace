@@ -46,7 +46,7 @@ const MODEL_REGISTRY_ABI = [
 ];
 
 // Add constants at the top of the file after imports
-const MIN_GAS_PRICE = ethers.utils.parseUnits('25', 'gwei'); // 25 Gwei minimum
+const MIN_GAS_PRICE = ethers.utils.parseUnits('35', 'gwei'); // Increased to 35 Gwei minimum to ensure transactions go through
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
@@ -206,14 +206,16 @@ class BlockchainService {
    */
   async getGasSettings() {
     const feeData = await this.provider.getFeeData();
+    
+    // Always use at least MIN_GAS_PRICE
+    const maxPriorityFeePerGas = ethers.BigNumber.from(MIN_GAS_PRICE);
+    const maxFeePerGas = maxPriorityFeePerGas.mul(2); // Double the priority fee for max fee
+    
     return {
-      maxFeePerGas: feeData.maxFeePerGas?.gt(MIN_GAS_PRICE) 
-        ? feeData.maxFeePerGas 
-        : MIN_GAS_PRICE,
-      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.gt(MIN_GAS_PRICE) 
-        ? feeData.maxPriorityFeePerGas 
-        : MIN_GAS_PRICE,
-      gasLimit: config.gasLimit
+      maxFeePerGas: maxFeePerGas,
+      maxPriorityFeePerGas: maxPriorityFeePerGas,
+      gasLimit: config.gasLimit,
+      type: 2 // Explicitly set EIP-1559 transaction type
     };
   }
 
