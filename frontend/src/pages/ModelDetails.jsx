@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWeb3 } from '../context/Web3Context';
-import { ArrowLeft, Send, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Send, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 import InferenceProgress from '../components/InferenceProgress';
 import toast from 'react-hot-toast';
 import { getCategoryName, formatAddress } from '../config/contracts';
@@ -9,7 +9,7 @@ import { getCategoryName, formatAddress } from '../config/contracts';
 function ModelDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { getModel, requestInference, isConnected } = useWeb3();
+  const { getModel, requestInference, isConnected, modelRegistry } = useWeb3();
   const BACKEND_API = process.env.REACT_APP_BACKEND_API_URL || import.meta.env.VITE_BACKEND_API_URL;
   
   const [model, setModel] = useState(null);
@@ -46,10 +46,30 @@ function ModelDetails() {
     try {
       setLoading(true);
       const modelData = await getModel(id);
-      setModel(modelData);
+      
+      let isAvailable = false;
+      try {
+        if (modelRegistry) {
+          isAvailable = await modelRegistry.isModelAvailable(id);
+        }
+      } catch (availabilityError) {
+        console.warn('Error checking model availability:', availabilityError);
+      }
+      
+      setModel({
+        ...modelData,
+        isAvailable
+      });
+
+      if (!modelData.isActive) {
+        toast.error('This model is currently inactive');
+      } else if (!isAvailable) {
+        toast.error('This model is not available (insufficient stake)');
+      }
     } catch (error) {
       console.error('Error loading model:', error);
       toast.error('Failed to load model');
+      navigate('/marketplace');
     } finally {
       setLoading(false);
     }
@@ -240,9 +260,23 @@ function ModelDetails() {
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-3xl font-bold mb-2">{model.name}</h1>
-            <span className="badge badge-info">
-              {getCategoryName(model.category)}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="badge badge-info">
+                {getCategoryName(model.category)}
+              </span>
+              {!model.isActive && (
+                <span className="badge badge-error flex items-center gap-1">
+                  <AlertTriangle className="h-4 w-4" />
+                  Inactive
+                </span>
+              )}
+              {!model.isAvailable && model.isActive && (
+                <span className="badge badge-warning flex items-center gap-1">
+                  <AlertTriangle className="h-4 w-4" />
+                  Unavailable
+                </span>
+              )}
+            </div>
           </div>
           <div className="text-right">
             <div className="text-gray-400 text-sm">Price per use</div>
@@ -302,7 +336,14 @@ function ModelDetails() {
           <button
             onClick={handleInference}
             disabled={processing || !inputText.trim()}
-            className="btn-primary w-full flex items-center justify-center space-x-2"
+            className={`btn-primary w-full flex items-center justify-center space-x-2 ${
+              (!model.isActive || !model.isAvailable) ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+            title={
+              !model.isActive ? 'Model is inactive' :
+              !model.isAvailable ? 'Model is not available (insufficient stake)' :
+              'Run inference'
+            }
           >
             {processing ? (
               <>
@@ -312,7 +353,11 @@ function ModelDetails() {
             ) : (
               <>
                 <Send className="h-5 w-5" />
-                <span>Run Inference ({model.price} MATIC)</span>
+                <span>
+                  {!model.isActive ? 'Model Inactive' :
+                   !model.isAvailable ? 'Not Available' :
+                   `Run Inference (${model.price} MATIC)`}
+                </span>
               </>
             )}
           </button>

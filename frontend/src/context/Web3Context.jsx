@@ -403,8 +403,20 @@ export function Web3Provider({ children }) {
     // Request inference
     async requestInference(modelId, inputText) {
       try {
-        // Get model price
+        // Get model details and verify availability
         const model = await contractHelpers.getModel(modelId);
+        
+        // Check if model is active
+        if (!model.isActive) {
+          throw new Error("Model is not active");
+        }
+        
+        // Check model availability (includes stake check)
+        const isAvailable = await modelRegistry.isModelAvailable(modelId);
+        if (!isAvailable) {
+          throw new Error("Model is not currently available (insufficient stake)");
+        }
+        
         const priceInWei = ethers.utils.parseEther(model.price);
         
         // Generate input hash
@@ -412,10 +424,14 @@ export function Web3Provider({ children }) {
           ethers.utils.toUtf8Bytes(inputText)
         );
         
+        // Add explicit gas limit to avoid estimation issues
         const tx = await inferenceMarket.requestInference(
           modelId,
           inputHash,
-          { value: priceInWei }
+          { 
+            value: priceInWei,
+            gasLimit: 500000 // Explicit gas limit
+          }
         );
         
         const receipt = await waitForTransaction(tx, 'Creating inference request');
