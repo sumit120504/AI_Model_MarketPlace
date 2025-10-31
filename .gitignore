@@ -309,3 +309,5 @@ playground/
 !docs/**/*.png
 !docs/**/*.jpg
 !docs/**/*.svg
+
+.venv

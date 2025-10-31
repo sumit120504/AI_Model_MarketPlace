@@ -4,6 +4,7 @@ import { getRequestIndexer } from './requestIndexer.js';
 import ipfsService from './ipfsService.js';
 import logger from '../utils/logger.js';
 import NodeCache from 'node-cache';
+import path from 'path';
 
 class InferenceEngine {
   constructor() {
@@ -116,10 +117,15 @@ class InferenceEngine {
       const model = await this.blockchain.getModel(requestDetails.modelId);
       logger.info(`Using model: ${model.name} (ID: ${model.modelId})`);
       
-      // Step 4: Download model from IPFS
+      // Step 4: Download model from IPFS and set it in SpamDetector
       logger.info(`Downloading model from IPFS: ${model.ipfsHash}`);
-      const modelPath = `./models/downloaded/${model.modelId}`;
+      const modelPath = path.join(process.cwd(), 'models', 'downloaded', `${model.modelId}.pkl`);
       await this.ipfsService.downloadFile(model.ipfsHash, modelPath);
+      logger.info(`Model downloaded to: ${modelPath}`);
+      
+      // Set the model path in SpamDetector
+      this.spamDetector.setModelPath(modelPath);
+      logger.info('Model path set in SpamDetector');
       
       // Step 5: Get input data from IPFS
       const inputText = await this.getInputData(requestDetails.inputDataHash);
