@@ -151,25 +151,28 @@ export function Web3Provider({ children }) {
   // Listen for account changes
   useEffect(() => {
     if (typeof window.ethereum !== 'undefined') {
-      window.ethereum.on('accountsChanged', (accounts) => {
+      const handleAccountsChanged = (accounts) => {
         if (accounts.length === 0) {
           disconnectWallet();
         } else {
           connectWallet();
         }
-      });
+      };
 
-      window.ethereum.on('chainChanged', () => {
+      const handleChainChanged = () => {
         window.location.reload();
-      });
-    }
+      };
 
-    return () => {
-      if (typeof window.ethereum !== 'undefined') {
-        window.ethereum.removeAllListeners('accountsChanged');
-        window.ethereum.removeAllListeners('chainChanged');
-      }
-    };
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      window.ethereum.on('chainChanged', handleChainChanged);
+
+      return () => {
+        if (typeof window.ethereum !== 'undefined') {
+          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+          window.ethereum.removeListener('chainChanged', handleChainChanged);
+        }
+      };
+    }
   }, []);
 
   // Refresh balance
@@ -182,6 +185,28 @@ export function Web3Provider({ children }) {
       } catch (error) {
         console.error('Error refreshing balance:', error);
       }
+    }
+  }
+
+  // Transaction confirmation helper
+  async function waitForTransaction(tx, description) {
+    try {
+      toast.loading(`${description}...`, { id: 'tx-pending' });
+      
+      const receipt = await tx.wait();
+      
+      toast.success(`${description} confirmed!`, { 
+        id: 'tx-pending',
+        duration: 5000
+      });
+      
+      return receipt;
+    } catch (error) {
+      toast.error(`${description} failed: ${error.message}`, { 
+        id: 'tx-pending',
+        duration: 5000
+      });
+      throw error;
     }
   }
 
@@ -274,14 +299,13 @@ export function Web3Provider({ children }) {
           { value: stakeInWei }
         );
         
-        toast.loading('Registering model...', { id: 'register' });
-        const receipt = await tx.wait();
+        const receipt = await waitForTransaction(tx, 'Registering model');
         
         // Get model ID from event
         const event = receipt.events.find(e => e.event === 'ModelRegistered');
         const modelId = event.args.modelId.toString();
         
-        toast.success(`Model registered! ID: ${modelId}`, { id: 'register' });
+        toast.success(`Model registered! ID: ${modelId}`);
         await refreshBalance();
         
         return modelId;
@@ -310,14 +334,13 @@ export function Web3Provider({ children }) {
           { value: priceInWei }
         );
         
-        toast.loading('Creating inference request...', { id: 'inference' });
-        const receipt = await tx.wait();
+        const receipt = await waitForTransaction(tx, 'Creating inference request');
         
         // Get request ID from event
         const event = receipt.events.find(e => e.event === 'InferenceRequested');
         const requestId = event.args.requestId.toString();
         
-        toast.success(`Request created! ID: ${requestId}`, { id: 'inference' });
+        toast.success(`Request created! ID: ${requestId}`);
         await refreshBalance();
         
         return requestId;
@@ -389,10 +412,7 @@ export function Web3Provider({ children }) {
         const priceInWei = ethers.utils.parseEther(newPrice.toString());
         const tx = await modelRegistry.updatePrice(modelId, priceInWei);
         
-        toast.loading('Updating price...', { id: 'update-price' });
-        await tx.wait();
-        
-        toast.success('Price updated!', { id: 'update-price' });
+        await waitForTransaction(tx, 'Updating price');
       } catch (error) {
         console.error('Error updating price:', error);
         toast.error('Failed to update price', { id: 'update-price' });
@@ -405,10 +425,7 @@ export function Web3Provider({ children }) {
       try {
         const tx = await modelRegistry.deactivateModel(modelId);
         
-        toast.loading('Deactivating model...', { id: 'deactivate' });
-        await tx.wait();
-        
-        toast.success('Model deactivated!', { id: 'deactivate' });
+        await waitForTransaction(tx, 'Deactivating model');
       } catch (error) {
         console.error('Error deactivating model:', error);
         toast.error('Failed to deactivate', { id: 'deactivate' });
@@ -421,10 +438,7 @@ export function Web3Provider({ children }) {
       try {
         const tx = await modelRegistry.activateModel(modelId);
         
-        toast.loading('Activating model...', { id: 'activate' });
-        await tx.wait();
-        
-        toast.success('Model activated!', { id: 'activate' });
+        await waitForTransaction(tx, 'Activating model');
       } catch (error) {
         console.error('Error activating model:', error);
         toast.error('Failed to activate', { id: 'activate' });

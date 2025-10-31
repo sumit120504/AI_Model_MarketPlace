@@ -1,7 +1,7 @@
-const winston = require('winston');
-const { config } = require('../config/config');
-const fs = require('fs');
-const path = require('path');
+import winston from 'winston';
+import { config } from '../config/config.js';
+import fs from 'fs';
+import path from 'path';
 
 // Create logs directory if it doesn't exist
 const logDir = path.dirname(config.logFile);
@@ -55,4 +55,4 @@ logger.logError = (error, context = '') => {
   logger.error(`${context}: ${error.message}`, { stack: error.stack });
 };
 
-module.exports = logger;
+export default logger;

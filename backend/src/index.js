@@ -1,7 +1,7 @@
-const { config, validateConfig } = require('./config/config');
-const { getInferenceEngine } = require('./services/inferenceEngine');
-const { APIServer } = require('./api/server');
-const logger = require('./utils/logger');
+import { config, validateConfig } from './config/config.js';
+import { getInferenceEngine } from './services/inferenceEngine.js';
+import { APIServer } from './api/server.js';
+import logger from './utils/logger.js';
 
 /**
  * Main entry point for the Compute Node
@@ -41,7 +41,7 @@ async function main() {
 ║     ✅ Compute Node is LIVE and READY!                   ║
 ║                                                           ║
 ║     Network: ${config.networkName.padEnd(43)} ║
-║     Node Address: ${config.nodeAddress?.substring(0, 20) || 'Not set'}...              ║
+║     Node Address: ${(config.nodeAddress || '').substring(0, 20) || 'Not set'}...              ║
 ║     API Server: http://${config.host}:${config.port.toString().padEnd(28)} ║
 ║                                                           ║
 ║     Monitoring blockchain for inference requests...      ║

@@ -1,12 +1,16 @@
-const { getBlockchainService } = require('./blockchainService');
-const { getSpamDetector } = require('../models/spamDetector');
-const logger = require('../utils/logger');
-const NodeCache = require('node-cache');
+import { getBlockchainService } from './blockchainService.js';
+import { getSpamDetector } from '../models/spamDetector.js';
+import { getRequestIndexer } from './requestIndexer.js';
+import ipfsService from './ipfsService.js';
+import logger from '../utils/logger.js';
+import NodeCache from 'node-cache';
 
 class InferenceEngine {
   constructor() {
     this.blockchain = null;
     this.spamDetector = null;
+    this.requestIndexer = null;
+    this.ipfsService = null;
     this.processing = new Map(); // Track requests being processed
     this.cache = new NodeCache({ stdTTL: 600 }); // 10 min cache
     this.stats = {
@@ -27,6 +31,15 @@ class InferenceEngine {
       // Initialize blockchain service
       this.blockchain = getBlockchainService();
       await this.blockchain.initialize();
+      
+      // Initialize request indexer
+      this.requestIndexer = getRequestIndexer();
+      await this.requestIndexer.initialize();
+      this.requestIndexer.startMaintenance();
+      
+      // Initialize IPFS service
+      this.ipfsService = ipfsService;
+      await this.ipfsService.initialize();
       
       // Initialize AI model
       this.spamDetector = getSpamDetector();
@@ -71,14 +84,15 @@ class InferenceEngine {
   async handleNewRequest(request) {
     const { requestId } = request;
     
-    // Check if already processing
+    // Atomic check-and-set to prevent race conditions
     if (this.processing.has(requestId)) {
       logger.warn(`Request #${requestId} already being processed`);
       return;
     }
     
-    // Mark as processing
-    this.processing.set(requestId, { startTime: Date.now(), status: 'processing' });
+    // Mark as processing atomically
+    const processingInfo = { startTime: Date.now(), status: 'processing' };
+    this.processing.set(requestId, processingInfo);
     
     try {
       logger.logInference(requestId, 'Starting', request);
@@ -130,25 +144,29 @@ class InferenceEngine {
       this.stats.totalProcessed++;
       
     } finally {
-      // Remove from processing map
-      this.processing.delete(requestId);
+      // Always remove from processing map, even if reportFailure fails
+      try {
+        this.processing.delete(requestId);
+      } catch (cleanupError) {
+        logger.error(`Failed to cleanup request #${requestId}:`, cleanupError);
+      }
     }
   }
   
   /**
-   * Poll for pending requests (backup mechanism)
+   * Poll for pending requests using indexer (avoids gas limit issues)
    */
   async pollPendingRequests() {
     try {
-      const pendingIds = await this.blockchain.getPendingRequests();
+      const pendingIds = this.requestIndexer.getPendingRequests();
       
       if (pendingIds.length > 0) {
-        logger.info(`Found ${pendingIds.length} pending requests`);
+        logger.info(`Found ${pendingIds.length} pending requests via indexer`);
         
         for (const requestId of pendingIds) {
           // Skip if already processing
           if (!this.processing.has(requestId)) {
-            const requestDetails = await this.blockchain.getRequest(requestId);
+            const requestDetails = await this.requestIndexer.getRequest(requestId);
             await this.handleNewRequest({
               requestId,
               modelId: requestDetails.modelId,
@@ -166,7 +184,7 @@ class InferenceEngine {
   
   /**
    * Get input data for inference
-   * In MVP, we use sample data. In production, fetch from IPFS or user upload
+   * Try IPFS first, fallback to sample data
    */
   async getInputData(inputDataHash) {
     // Check cache first
@@ -176,28 +194,40 @@ class InferenceEngine {
       return cached;
     }
     
-    // For MVP: Generate sample spam/non-spam emails based on hash
-    // In production: Fetch actual data from IPFS or user-provided source
+    let inputData;
     
-    const sampleEmails = [
-      "Hi John, let's meet for coffee tomorrow at 3pm. Looking forward to catching up!",
-      "CONGRATULATIONS! You've WON $1,000,000! Click here NOW to claim your prize!!!",
-      "Meeting reminder: Q4 planning session scheduled for Monday 10am in Conference Room B",
-      "🎉 FREE MONEY! Limited time offer! Act now and get rich quick! No risk!!!",
-      "Your package has been delivered. Tracking number: 1Z999AA10123456784",
-      "Buy now! Special discount! Click here! Hurry before it's too late!!!"
-    ];
-    
-    // Use hash to deterministically select an email
-    const hashNum = parseInt(inputDataHash.slice(2, 10), 16);
-    const selectedEmail = sampleEmails[hashNum % sampleEmails.length];
+    try {
+      // Try to fetch from IPFS
+      if (this.ipfsService && this.ipfsService.isValidHash(inputDataHash)) {
+        inputData = await this.ipfsService.getFileContent(inputDataHash);
+        logger.info(`📥 Retrieved input data from IPFS: ${inputDataHash.substring(0, 10)}...`);
+      } else {
+        throw new Error('Invalid IPFS hash or IPFS service not available');
+      }
+    } catch (ipfsError) {
+      logger.warn(`Failed to fetch from IPFS: ${ipfsError.message}, using sample data`);
+      
+      // Fallback to sample data for MVP
+      const sampleEmails = [
+        "Hi John, let's meet for coffee tomorrow at 3pm. Looking forward to catching up!",
+        "CONGRATULATIONS! You've WON $1,000,000! Click here NOW to claim your prize!!!",
+        "Meeting reminder: Q4 planning session scheduled for Monday 10am in Conference Room B",
+        "🎉 FREE MONEY! Limited time offer! Act now and get rich quick! No risk!!!",
+        "Your package has been delivered. Tracking number: 1Z999AA10123456784",
+        "Buy now! Special discount! Click here! Hurry before it's too late!!!"
+      ];
+      
+      // Use hash to deterministically select an email
+      const hashNum = parseInt(inputDataHash.slice(2, 10), 16);
+      inputData = sampleEmails[hashNum % sampleEmails.length];
+      
+      logger.info(`Using sample data (hash: ${inputDataHash.substring(0, 10)}...)`);
+    }
     
     // Cache for future use
-    this.cache.set(inputDataHash, selectedEmail);
+    this.cache.set(inputDataHash, inputData);
     
-    logger.info(`Selected sample email (hash: ${inputDataHash.substring(0, 10)}...)`);
-    
-    return selectedEmail;
+    return inputData;
   }
   
   /**
@@ -272,4 +302,4 @@ function getInferenceEngine() {
   return inferenceEngineInstance;
 }
 
-module.exports = { InferenceEngine, getInferenceEngine };
+export { InferenceEngine, getInferenceEngine };

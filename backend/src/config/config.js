@@ -1,4 +1,4 @@
-require('dotenv').config();
+import 'dotenv/config';
 
 const config = {
   // Blockchain
@@ -32,8 +32,9 @@ const config = {
   logFile: process.env.LOG_FILE || './logs/compute-node.log',
   
   // IPFS
-  ipfsGateway: process.env.IPFS_GATEWAY || 'https://gateway.pinata.cloud',
-  ipfsApiKey: process.env.IPFS_API_KEY,
+  ipfsGateway: process.env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs',
+  ipfsApiKey: process.env.PINATA_API_KEY,
+  ipfsSecretKey: process.env.PINATA_SECRET_KEY,
   
   // Gas
   gasLimit: parseInt(process.env.GAS_LIMIT) || 500000,
@@ -66,4 +67,4 @@ function validateConfig() {
   console.log('✅ Configuration validated');
 }
 
-module.exports = { config, validateConfig };
+export { config, validateConfig };

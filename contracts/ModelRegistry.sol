@@ -211,7 +211,8 @@ contract ModelRegistry {
         require(model.creatorStake - _amount >= MIN_STAKE, "Must maintain minimum stake");
         
         model.creatorStake -= _amount;
-        payable(msg.sender).transfer(_amount);
+        (bool success, ) = payable(msg.sender).call{value: _amount}("");
+        require(success, "Stake withdrawal transfer failed");
         
         emit StakeWithdrawn(_modelId, _amount);
     }
@@ -260,7 +261,8 @@ contract ModelRegistry {
         if (model.creatorStake >= _slashAmount) {
             model.creatorStake -= _slashAmount;
             // Transfer slashed amount to platform owner
-            payable(owner).transfer(_slashAmount);
+            (bool success, ) = payable(owner).call{value: _slashAmount}("");
+            require(success, "Slash transfer failed");
         }
         
         // Deactivate if reputation too low

@@ -1,5 +1,5 @@
-const natural = require('natural');
-const logger = require('../utils/logger');
+import natural from 'natural';
+import logger from '../utils/logger.js';
 
 /**
  * Simple Spam Detector using NLP
@@ -169,4 +169,4 @@ function getSpamDetector() {
   return detectorInstance;
 }
 
-module.exports = { SpamDetector, getSpamDetector };
+export { SpamDetector, getSpamDetector };

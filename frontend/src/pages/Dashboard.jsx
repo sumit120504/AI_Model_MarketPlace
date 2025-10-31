@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useWeb3 } from '../context/Web3Context';
-import { Loader2, History, Package } from 'lucide-react';
+import { Loader2, History, Package, Plus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getStatusInfo } from '../config/contracts';
 import { formatDistance } from 'date-fns';
+import ModelRegistration from '../components/ModelRegistration';
 
 function Dashboard() {
   const { account, isConnected, getUserRequests, getCreatorModels } = useWeb3();
@@ -12,6 +13,7 @@ function Dashboard() {
   const [myModels, setMyModels] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('requests'); // 'requests' or 'models'
+  const [showModelRegistration, setShowModelRegistration] = useState(false);
 
   useEffect(() => {
     if (isConnected && account) {
@@ -188,7 +190,16 @@ function Dashboard() {
         </div>
       ) : (
         <div className="space-y-4">
-          <h2 className="text-xl font-bold">My Models</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold">My Models</h2>
+            <button
+              onClick={() => setShowModelRegistration(true)}
+              className="btn-primary flex items-center space-x-2"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Register Model</span>
+            </button>
+          </div>
           
           {myModels.length === 0 ? (
             <div className="card text-center py-12">
@@ -197,6 +208,12 @@ function Dashboard() {
               <p className="text-sm text-gray-500 mt-2">
                 Register your first AI model to start earning
               </p>
+              <button
+                onClick={() => setShowModelRegistration(true)}
+                className="btn-primary mt-4"
+              >
+                Register Your First Model
+              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -239,6 +256,12 @@ function Dashboard() {
           )}
         </div>
       )}
+      
+      {/* Model Registration Modal */}
+      <ModelRegistration
+        isOpen={showModelRegistration}
+        onClose={() => setShowModelRegistration(false)}
+      />
     </div>
   );
 }

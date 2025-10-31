@@ -1,10 +1,15 @@
-const { ethers } = require('ethers');
-const { config } = require('../config/config');
-const logger = require('../utils/logger');
+import { ethers } from 'ethers';
+import { config } from '../config/config.js';
+import logger from '../utils/logger.js';
 
 // Contract ABIs (minimal - only functions we need)
 const INFERENCE_MARKET_ABI = [
+  // Events
   "event InferenceRequested(uint256 indexed requestId, uint256 indexed modelId, address indexed user, bytes32 inputDataHash, uint256 payment)",
+  "event RequestPickedUp(uint256 indexed requestId, address indexed computeNode)",
+  "event InferenceCompleted(uint256 indexed requestId, bytes32 resultHash, address indexed computeNode)",
+  "event InferenceFailed(uint256 indexed requestId, string reason)",
+  // Functions
   "function pickupRequest(uint256 _requestId) external",
   "function submitResult(uint256 _requestId, bytes32 _resultHash, string memory _resultData) external",
   "function reportFailure(uint256 _requestId, string memory _reason) external",
@@ -16,6 +21,11 @@ const INFERENCE_MARKET_ABI = [
 const MODEL_REGISTRY_ABI = [
   "function getModel(uint256 _modelId) external view returns (tuple(uint256 modelId, address creator, string ipfsHash, string name, string description, uint8 category, uint256 pricePerInference, uint256 creatorStake, uint256 totalInferences, uint256 totalEarnings, uint256 reputationScore, uint256 createdAt, bool isActive))"
 ];
+
+// Add constants at the top of the file after imports
+const MIN_GAS_PRICE = ethers.utils.parseUnits('25', 'gwei'); // 25 Gwei minimum
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
 
 class BlockchainService {
   constructor() {
@@ -165,93 +175,95 @@ class BlockchainService {
   }
   
   /**
+   * Get current network gas settings with minimum values enforced
+   */
+  async getGasSettings() {
+    const feeData = await this.provider.getFeeData();
+    return {
+      maxFeePerGas: feeData.maxFeePerGas?.gt(MIN_GAS_PRICE) 
+        ? feeData.maxFeePerGas 
+        : MIN_GAS_PRICE,
+      maxPriorityFeePerGas: feeData.maxPriorityFeePerGas?.gt(MIN_GAS_PRICE) 
+        ? feeData.maxPriorityFeePerGas 
+        : MIN_GAS_PRICE,
+      gasLimit: config.gasLimit
+    };
+  }
+
+  /**
+   * Execute transaction with retries
+   */
+  async executeWithRetry(operation) {
+    let lastError;
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      try {
+        const gasSettings = await this.getGasSettings();
+        return await operation(gasSettings);
+      } catch (error) {
+        lastError = error;
+        logger.warn(`Attempt ${i + 1}/${MAX_RETRIES} failed: ${error.message}`);
+        if (i < MAX_RETRIES - 1) {
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * Pickup a pending request
    */
   async pickupRequest(requestId) {
-    try {
+    return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Picking up request #${requestId}...`);
       
-      const tx = await this.inferenceMarket.pickupRequest(requestId, {
-        gasLimit: config.gasLimit
-      });
-      
+      const tx = await this.inferenceMarket.pickupRequest(requestId, gasSettings);
       logger.logTransaction(tx.hash, `Pickup request #${requestId}`);
       
       const receipt = await tx.wait();
-      
       logger.info(`✅ Request #${requestId} picked up (Block: ${receipt.blockNumber})`);
       
       return { success: true, txHash: tx.hash, receipt };
-      
-    } catch (error) {
-      logger.error(`Failed to pickup request #${requestId}:`, error);
-      throw error;
-    }
+    });
   }
-  
+
   /**
    * Submit inference result with proof
    */
   async submitResult(requestId, resultData) {
-    try {
+    return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Submitting result for request #${requestId}...`);
       
-      // Generate result hash
-      const resultHash = ethers.utils.keccak256(
-        ethers.utils.toUtf8Bytes(resultData)
-      );
-      
-      logger.info(`Result: ${resultData}`);
+      const resultHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(resultData));
       logger.info(`Result Hash: ${resultHash}`);
       
-      const tx = await this.inferenceMarket.submitResult(
-        requestId,
-        resultHash,
-        resultData,
-        {
-          gasLimit: config.gasLimit
-        }
-      );
-      
+      const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
       logger.logTransaction(tx.hash, `Submit result #${requestId}`);
       
       const receipt = await tx.wait();
-      
       logger.info(`✅ Result submitted for #${requestId} (Block: ${receipt.blockNumber})`);
       
       return { success: true, txHash: tx.hash, receipt, resultHash };
-      
-    } catch (error) {
-      logger.error(`Failed to submit result for #${requestId}:`, error);
-      throw error;
-    }
+    });
   }
-  
+
   /**
    * Report failed inference
    */
   async reportFailure(requestId, reason) {
-    try {
+    return this.executeWithRetry(async (gasSettings) => {
       logger.warn(`Reporting failure for request #${requestId}: ${reason}`);
       
-      const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
-        gasLimit: config.gasLimit
-      });
-      
+      const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
       logger.logTransaction(tx.hash, `Report failure #${requestId}`);
       
       const receipt = await tx.wait();
-      
       logger.info(`✅ Failure reported for #${requestId}`);
       
       return { success: true, txHash: tx.hash, receipt };
-      
-    } catch (error) {
-      logger.error(`Failed to report failure for #${requestId}:`, error);
-      throw error;
-    }
+    });
   }
-  
+
   /**
    * Get current gas price
    */
@@ -279,4 +291,4 @@ function getBlockchainService() {
   return blockchainServiceInstance;
 }
 
-module.exports = { BlockchainService, getBlockchainService };
+export { BlockchainService, getBlockchainService };

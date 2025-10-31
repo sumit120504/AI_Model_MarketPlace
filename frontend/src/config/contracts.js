@@ -1,12 +1,12 @@
 // Contract addresses (update with your deployed addresses)
 export const CONTRACTS = {
   MODEL_REGISTRY: import.meta.env.VITE_MODEL_REGISTRY_ADDRESS || "0x31bf20a858Ad971121DF5d6C0200bDe589c90D4a",
-  INFERENCE_MARKET: import.meta.env.VITE_INFERENCE_MARKET_ADDRESS || "0xYourInferenceMarketAddress",
+  INFERENCE_MARKET: import.meta.env.VITE_INFERENCE_MARKET_ADDRESS || "0x0000000000000000000000000000000000000000",
 };
 
 // Network configuration
 export const NETWORK = {
-  chainId: parseInt(import.meta.env.VITE_CHAIN_ID) || 80001,
+  chainId: parseInt(import.meta.env.VITE_CHAIN_ID, 10) || 80001,
   name: import.meta.env.VITE_CHAIN_NAME || "Mumbai Testnet",
   rpcUrl: import.meta.env.VITE_RPC_URL || "https://rpc-mumbai.maticvigil.com",
   blockExplorer: import.meta.env.VITE_BLOCK_EXPLORER || "https://mumbai.polygonscan.com",

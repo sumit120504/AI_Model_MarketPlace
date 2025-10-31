@@ -1,15 +1,18 @@
-const express = require('express');
-const cors = require('cors');
-const { config } = require('../config/config');
-const { getInferenceEngine } = require('../services/inferenceEngine');
-const { getBlockchainService } = require('../services/blockchainService');
-const logger = require('../utils/logger');
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { config } from '../config/config.js';
+import { getInferenceEngine } from '../services/inferenceEngine.js';
+import { getBlockchainService } from '../services/blockchainService.js';
+import ipfsService from '../services/ipfsService.js';
+import logger from '../utils/logger.js';
 
 class APIServer {
   constructor() {
     this.app = express();
     this.engine = null;
     this.blockchain = null;
+    this.ipfsService = null;
   }
   
   /**
@@ -18,10 +21,25 @@ class APIServer {
   async initialize() {
     this.engine = getInferenceEngine();
     this.blockchain = getBlockchainService();
+    this.ipfsService = ipfsService;
     
-    // Middleware
-    this.app.use(cors());
-    this.app.use(express.json());
+    // Rate limiting
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100, // limit each IP to 100 requests per windowMs
+      message: 'Too many requests from this IP, please try again later.',
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    this.app.use(limiter);
+    
+    // CORS configuration
+    this.app.use(cors({
+      origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:5173'],
+      credentials: true
+    }));
+    
+    this.app.use(express.json({ limit: '10mb' }));
     
     // Request logging
     this.app.use((req, res, next) => {
@@ -114,6 +132,19 @@ class APIServer {
           return res.status(400).json({ error: 'Text required' });
         }
         
+        // Input validation
+        if (typeof text !== 'string') {
+          return res.status(400).json({ error: 'Text must be a string' });
+        }
+        
+        if (text.length === 0) {
+          return res.status(400).json({ error: 'Text cannot be empty' });
+        }
+        
+        if (text.length > 10000) {
+          return res.status(400).json({ error: 'Text too long (max 10,000 characters)' });
+        }
+        
         const spamDetector = this.engine.spamDetector;
         const result = await spamDetector.detectSpam(text);
         
@@ -127,6 +158,57 @@ class APIServer {
     this.app.get('/stats', (req, res) => {
       const status = this.engine.getStatus();
       res.json(status.stats);
+    });
+    
+    // IPFS endpoints
+    this.app.post('/ipfs/upload', async (req, res) => {
+      try {
+        const { content, filename } = req.body;
+        
+        if (!content) {
+          return res.status(400).json({ error: 'Content required' });
+        }
+        
+        const hash = await this.ipfsService.uploadFile(content, filename || 'file');
+        res.json({ hash, gateway: config.ipfsGateway });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    this.app.get('/ipfs/:hash', async (req, res) => {
+      try {
+        const { hash } = req.params;
+        
+        if (!this.ipfsService.isValidHash(hash)) {
+          return res.status(400).json({ error: 'Invalid IPFS hash' });
+        }
+        
+        const content = await this.ipfsService.getFileContent(hash);
+        res.json({ content, hash });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    this.app.get('/ipfs/:hash/info', async (req, res) => {
+      try {
+        const { hash } = req.params;
+        
+        if (!this.ipfsService.isValidHash(hash)) {
+          return res.status(400).json({ error: 'Invalid IPFS hash' });
+        }
+        
+        const info = await this.ipfsService.getFileInfo(hash);
+        res.json(info);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+    
+    this.app.get('/ipfs/status', (req, res) => {
+      const status = this.ipfsService.getStatus();
+      res.json(status);
     });
     
     // 404 handler
@@ -159,4 +241,4 @@ class APIServer {
   }
 }
 
-module.exports = { APIServer };
+export { APIServer };

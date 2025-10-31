@@ -15,6 +15,7 @@ function ModelDetails() {
   const [inputText, setInputText] = useState('');
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState(null);
+  const [pollingInterval, setPollingInterval] = useState(null);
 
   useEffect(() => {
     if (isConnected && id) {
@@ -51,17 +52,8 @@ function ModelDetails() {
         duration: 5000
       });
       
-      // Simulate waiting for result (in production, poll blockchain)
-      setTimeout(() => {
-        setResult({
-          requestId,
-          result: inputText.toLowerCase().includes('free') || inputText.toLowerCase().includes('win') 
-            ? 'SPAM' 
-            : 'NOT_SPAM',
-          confidence: 0.95
-        });
-        setProcessing(false);
-      }, 3000);
+      // Start polling for result
+      startPolling(requestId);
       
     } catch (error) {
       console.error('Error requesting inference:', error);
@@ -69,6 +61,54 @@ function ModelDetails() {
       setProcessing(false);
     }
   }
+
+  function startPolling(requestId) {
+    const interval = setInterval(async () => {
+      try {
+        // In a real implementation, you would poll the blockchain or backend API
+        // For now, we'll simulate the result after a delay
+        const elapsed = Date.now() - (window.requestStartTime || Date.now());
+        
+        if (elapsed > 5000) { // 5 seconds
+          clearInterval(interval);
+          setPollingInterval(null);
+          
+          // Simulate result based on input content
+          const isSpam = inputText.toLowerCase().includes('free') || 
+                        inputText.toLowerCase().includes('win') ||
+                        inputText.toLowerCase().includes('congratulations') ||
+                        inputText.toLowerCase().includes('$$$');
+          
+          setResult({
+            requestId,
+            result: isSpam ? 'SPAM' : 'NOT_SPAM',
+            confidence: isSpam ? 0.95 : 0.87
+          });
+          setProcessing(false);
+          
+          toast.success('Inference completed!');
+        }
+      } catch (error) {
+        console.error('Error polling for result:', error);
+        clearInterval(interval);
+        setPollingInterval(null);
+        setProcessing(false);
+        toast.error('Failed to get result');
+      }
+    }, 1000);
+    
+    setPollingInterval(interval);
+    window.requestStartTime = Date.now();
+  }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [pollingInterval]);
 
   if (!isConnected) {
     return (
