@@ -1,6 +1,7 @@
 import { ethers } from 'ethers';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
+import { getGasSettings, getReplacementGasSettings } from '../utils/gasUtils.js';
 
 // Contract ABIs (minimal - only functions we need)
 const INFERENCE_MARKET_ABI = [
@@ -271,68 +272,79 @@ class BlockchainService {
    */
   async executeWithRetry(operation) {
     let lastError;
-    
-    // List of backup RPC URLs to try (Amoy testnet-first)
-    // Order: primary Amoy RPC, public fallback endpoints, then other public providers
+    let attempt = 0;
+    const maxAttempts = MAX_RETRIES;
+    const baseDelay = RETRY_DELAY;
+
+    // List of backup RPC URLs to try
     const rpcUrls = config.rpcUrls;
+
     for (const rpcUrl of rpcUrls) {
       // Update provider URL
       this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
       this.wallet = new ethers.Wallet(config.privateKey, this.provider);
-      // Create signer that enforces high gas values
-      const enforceMinGasSigner = {
-        ...this.wallet,
-        sendTransaction: async (tx) => {
-          // Start with high values to ensure transaction goes through
-          const tipCap = ethers.utils.parseUnits('100', 'gwei');
-          const baseFee = ethers.utils.parseUnits('100', 'gwei');
-          const eip1559Tx = {
-            ...tx,
-            type: 2, // EIP-1559
-            chainId: config.chainId,
-            maxPriorityFeePerGas: tipCap,
-            maxFeePerGas: baseFee.mul(2).add(tipCap),
-            gasPrice: undefined
-          };
-          return this.wallet.sendTransaction(eip1559Tx);
-        }
-      };
+      
+      // Reconnect contracts with the new provider and wallet
       this.inferenceMarket = new ethers.Contract(
         config.inferenceMarketAddress,
         INFERENCE_MARKET_ABI,
-        enforceMinGasSigner
+        this.wallet
       );
       this.modelRegistry = new ethers.Contract(
         config.modelRegistryAddress,
         MODEL_REGISTRY_ABI,
-        enforceMinGasSigner
+        this.wallet
       );
+
       // Try operation with current RPC
-      for (let i = 0; i < MAX_RETRIES; i++) {
+      while (attempt < maxAttempts) {
         try {
-          // Get gas settings with increased price for each retry
-          const baseGwei = 25; // Network minimum
-          const increasedGwei = baseGwei + (i * 50); // Increase by 50 Gwei each retry
-          const gasPrice = ethers.utils.parseUnits(String(increasedGwei), 'gwei');
-          // Construct legacy transaction settings
-          const gasSettings = {
-            gasPrice,
-            gasLimit: config.gasLimit,
-            nonce: await this.wallet.getTransactionCount()
-          };
-          // TODO: Future improvement: If tx is stuck (timeout), automatically replace with higher-fee tx using same nonce (replacement tx logic)
-          // Call operation with our settings
-          const result = await operation(gasSettings);
+          // Get fresh gas settings for each attempt
+          const priorityLevel = attempt; // Increase priority with each attempt
+          const gasParams = await getGasSettings(this.provider, priorityLevel);
+          
+          // Add current nonce to gas settings
+          const nonce = await this.wallet.getTransactionCount();
+          const params = { ...gasParams, nonce };
+          
+          // Execute operation
+          const result = await operation(params);
           return result;
+
         } catch (error) {
           lastError = error;
-          logger.warn(`Attempt ${i + 1}/${MAX_RETRIES} with ${rpcUrl} failed: ${error.message}`);
-          if (i < MAX_RETRIES - 1) {
-            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          attempt++;
+          
+          if (attempt < maxAttempts) {
+            // Check for specific error conditions
+            if (error.code === 'REPLACEMENT_UNDERPRICED') {
+              logger.info('Transaction underpriced, retrying with higher gas...');
+              const replacementGas = await getReplacementGasSettings(this.provider, lastError.transaction);
+              try {
+                const result = await operation(replacementGas);
+                return result;
+              } catch (retryError) {
+                lastError = retryError;
+                continue;
+              }
+            }
+            
+            // Exponential backoff with max delay of 10 seconds
+            const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 10000);
+            logger.info(`Retrying operation in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
           }
+
+          // If all retries on current RPC failed, log and continue to next RPC
+          logger.warn(`All attempts with ${rpcUrl} failed, trying next RPC if available...`);
+          break;
         }
       }
     }
+
+    // If we get here, all retries on all RPCs failed
+    logger.error(`All retry attempts failed after ${maxAttempts} tries on ${rpcUrls.length} RPCs`);
     throw lastError;
   }
 
@@ -343,9 +355,13 @@ class BlockchainService {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Picking up request #${requestId}...`);
       
+      // Get current nonce and gas settings
+      const nonce = await this.wallet.getTransactionCount();
+      const gasParams = await getGasSettings(this.provider, 0);
+      
       const tx = await this.inferenceMarket.pickupRequest(requestId, {
-        ...gasSettings,
-        nonce: await this.wallet.getTransactionCount()
+        ...gasParams,
+        nonce
       });
       logger.logTransaction(tx.hash, `Pickup request #${requestId}`);
       
@@ -409,8 +425,15 @@ class BlockchainService {
           throw new Error('Invalid request state for failure reporting');
         }
         
+        // Get current nonce and gas settings
+        const nonce = await this.wallet.getTransactionCount();
+        const gasParams = await getGasSettings(this.provider, 0);
+        
         // Report failure which triggers refund
-        const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
+        const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
+          ...gasParams,
+          nonce
+        });
         logger.logTransaction(tx.hash, `Report failure for request #${requestId}`);
         
         const receipt = await tx.wait();
@@ -432,6 +455,23 @@ class BlockchainService {
         }
       } catch (error) {
         logger.error(`Failed to report failure for request #${requestId}:`, error);
+        
+        // If transaction underpriced, try with higher gas
+        if (error.code === 'REPLACEMENT_UNDERPRICED') {
+          logger.info('Retrying with higher gas price...');
+          const gasParams = await getGasSettings(this.provider, 1); // Retry with higher gas
+          const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
+            ...gasParams,
+            nonce: await this.wallet.getTransactionCount()
+          });
+          const receipt = await tx.wait();
+          return {
+            success: true,
+            txHash: tx.hash,
+            receipt
+          };
+        }
+        
         throw error;
       }
     });

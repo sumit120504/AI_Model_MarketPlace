@@ -114,6 +114,41 @@ class InferenceEngine {
       }
       processingInfo.status = `${step}_${status}`;
       
+      // Update progress stage and cache
+      let progressStage;
+      let progressPercent;
+      
+      switch(step) {
+        case 'pickup':
+          progressStage = status === 'started' ? 'PENDING' : 'DOWNLOADING';
+          progressPercent = status === 'started' ? 5 : 10;
+          break;
+        case 'modelDownload':
+          progressStage = 'DOWNLOADING';
+          progressPercent = status === 'started' ? 15 : 30;
+          break;
+        case 'inputData':
+          progressStage = 'INITIALIZING';
+          progressPercent = status === 'started' ? 35 : 50;
+          break;
+        case 'inference':
+          progressStage = 'PROCESSING';
+          progressPercent = status === 'started' ? 60 : 80;
+          break;
+        case 'submission':
+          progressStage = status === 'completed' ? 'COMPLETED' : 'SAVING';
+          progressPercent = status === 'completed' ? 100 : 90;
+          break;
+        default:
+          progressStage = 'PENDING';
+          progressPercent = 0;
+      }
+
+      this.cache.set(`progress_${requestId}`, {
+        status: progressStage,
+        progress: progressPercent
+      });
+      
       // Log status update with timing information
       const duration = stepInfo.endTime ? (stepInfo.endTime - stepInfo.startTime) : null;
       logger.info(`[Request #${requestId}] ${step}: ${status} ${duration ? `(${duration}ms)` : ''}`);

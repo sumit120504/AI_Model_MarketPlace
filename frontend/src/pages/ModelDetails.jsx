@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWeb3 } from '../context/Web3Context';
 import { ArrowLeft, Send, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import InferenceProgress from '../components/InferenceProgress';
 import toast from 'react-hot-toast';
 import { getCategoryName, formatAddress } from '../config/contracts';
 
@@ -17,12 +18,29 @@ function ModelDetails() {
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState(null);
   const [pollingInterval, setPollingInterval] = useState(null);
+  const [requestStatus, setRequestStatus] = useState(null);
+  const [startTime, setStartTime] = useState(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [progressInfo, setProgressInfo] = useState(null);
 
   useEffect(() => {
     if (isConnected && id) {
       loadModel();
     }
   }, [isConnected, id]);
+
+  // Update elapsed time while processing
+  useEffect(() => {
+    let timer;
+    if (processing && startTime) {
+      timer = setInterval(() => {
+        setElapsedTime(Date.now() - startTime);
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [processing, startTime]);
 
   async function loadModel() {
     try {
@@ -37,7 +55,7 @@ function ModelDetails() {
     }
   }
 
-  async function handleInference() {
+   async function handleInference() {
     if (!inputText.trim()) {
       toast.error('Please enter some text');
       return;
@@ -46,6 +64,13 @@ function ModelDetails() {
     try {
       setProcessing(true);
       setResult(null);
+      setRequestStatus('PENDING');
+      setStartTime(Date.now());
+      setElapsedTime(0);
+      setProgressInfo({
+        status: 'PENDING',
+        progress: 0
+      });
       
       const requestId = await requestInference(id, inputText);
       
@@ -54,16 +79,16 @@ function ModelDetails() {
       });
       
       // Start polling for result
-      startPolling(requestId);
-      
+      startPolling(requestId);    
     } catch (error) {
       console.error('Error requesting inference:', error);
-      toast.error('Failed to request inference');
+      toast.error(`Failed to request inference: ${error.message}`);
       setProcessing(false);
+      setProgressInfo(null);
     }
   }
 
-  async function startPolling(requestId) {
+   async function startPolling(requestId) {
     const MAX_ATTEMPTS = 30; // 30 x 2 seconds = 1 minute max
     let attempts = 0;
     const interval = setInterval(async () => {
@@ -72,8 +97,32 @@ function ModelDetails() {
 
         // Prefer backend API which can return the result payload saved by compute node
         const resp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/requests/${requestId}`);
-        if (!resp.ok) throw new Error('Failed to fetch request status');
+        if (!resp.ok) {
+          const errorText = await resp.text();
+          throw new Error(`Failed to fetch request status: ${errorText}`);
+        }
         const request = await resp.json();
+        if (!request) throw new Error('Invalid response format');        // Update status and progress
+        setRequestStatus(request.statusText || 'PENDING');
+        if (request.progress) {
+          setProgressInfo(request.progress);
+        } else {
+          // Estimate progress based on status
+          const stageRanges = {
+            'PENDING': [0, 10],
+            'DOWNLOADING': [10, 30],
+            'INITIALIZING': [30, 50],
+            'PROCESSING': [50, 80],
+            'SAVING': [80, 95],
+            'COMPLETED': [100, 100],
+            'FAILED': [0, 0]
+          };
+          const [min, max] = stageRanges[request.statusText] || [0, 0];
+          setProgressInfo({
+            status: request.statusText,
+            progress: Math.floor(min + (Math.random() * (max - min)))
+          });
+        }
 
         // Completed status (2 = COMPLETED)
         if (request.status === '2' || request.status === 2 || request.statusText === 'COMPLETED') {
@@ -97,6 +146,10 @@ function ModelDetails() {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
+          setProgressInfo({
+            status: 'FAILED',
+            progress: 0
+          });
           toast.error('Inference failed: ' + (request.failureReason || 'Unknown error'));
           return;
         }
@@ -105,15 +158,29 @@ function ModelDetails() {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
+          setProgressInfo({
+            status: 'FAILED',
+            progress: 0
+          });
           toast.error('Request timed out. Please try again.');
           return;
         }
       } catch (error) {
         console.error('Error polling for result:', error);
+        if (attempts < MAX_ATTEMPTS) {
+          // Continue polling on temporary errors
+          console.log(`Retrying... Attempt ${attempts}/${MAX_ATTEMPTS}`);
+          return;
+        }
+        // Stop on max attempts
         clearInterval(interval);
         setPollingInterval(null);
         setProcessing(false);
-        toast.error('Failed to get result');
+        setProgressInfo({
+          status: 'FAILED',
+          progress: 0
+        });
+        toast.error(`Failed to get result: ${error.message}`);
       }
     }, 2000);
     
@@ -250,6 +317,17 @@ function ModelDetails() {
             )}
           </button>
         </div>
+
+        {/* Progress Indicator */}
+        {processing && (
+          <div className="mt-4">
+            <InferenceProgress 
+              status={requestStatus}
+              progress={progressInfo?.progress || 0}
+              startTime={startTime}
+            />
+          </div>
+        )}
 
         {/* Result Display */}
         {result && (

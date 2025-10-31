@@ -1,7 +1,7 @@
 // Contract addresses (update with your deployed addresses)
 export const CONTRACTS = {
-  MODEL_REGISTRY: import.meta.env.VITE_MODEL_REGISTRY_ADDRESS || "0x31bf20a858Ad971121DF5d6C0200bDe589c90D4a",
-  INFERENCE_MARKET: import.meta.env.VITE_INFERENCE_MARKET_ADDRESS || "0x0000000000000000000000000000000000000000",
+  MODEL_REGISTRY: import.meta.env.VITE_MODEL_REGISTRY_ADDRESS ,
+  INFERENCE_MARKET: import.meta.env.VITE_INFERENCE_MARKET_ADDRESS,
 };
 
 // Network configuration

@@ -139,16 +139,27 @@ class APIServer {
       try {
         const { requestId } = req.params;
         const request = await this.blockchain.getRequest(requestId);
-          // Try to enrich response with locally stored result data (if available)
+          
+          // Try to enrich response with locally stored result data and progress info
           try {
             const resultsPath = path.join(process.cwd(), 'data', 'results', `${requestId}.json`);
+            
+            // Get progress information from engine cache
+            const progressInfo = this.engine && this.engine.cache ? 
+              this.engine.cache.get(`progress_${requestId}`) : null;
+            
+            if (progressInfo) {
+              request.progress = progressInfo;
+            }
+            
             if (fs.existsSync(resultsPath)) {
               const resultContent = await fs.promises.readFile(resultsPath, 'utf8');
               const parsed = JSON.parse(resultContent);
               request.resultData = parsed;
             } else {
               // If we cached an IPFS pointer in the engine cache, attach it
-              const cached = this.engine && this.engine.cache ? this.engine.cache.get(`result_${requestId}`) : null;
+              const cached = this.engine && this.engine.cache ? 
+                this.engine.cache.get(`result_${requestId}`) : null;
               if (cached && cached.ipfsHash) {
                 request.resultData = { ipfsHash: cached.ipfsHash };
               }

@@ -280,23 +280,50 @@ class ModelRunner {
         throw new Error(errorMessage);
       }
 
-      // Process results
+      // Normalize results to standard schema
       let processedResults = {
         success: true,
         result: null,
-        confidence: null
+        confidence: null,
+        metadata: results.metadata || {}
       };
 
-      if (results.output && results.output.prediction !== undefined) {
-        processedResults.result = Boolean(results.output.prediction);  // Convert to boolean for spam detection
-        
-        if (results.output.probabilities) {
-          // Get confidence from probability of the predicted class
+      if (results.output) {
+        // Case 1: Standard format with label and confidence
+        if (results.output.label !== undefined && results.output.confidence !== undefined) {
+          processedResults.result = results.output.label;
+          processedResults.confidence = results.output.confidence;
+        }
+        // Case 2: Prediction index with probabilities array
+        else if (results.output.prediction !== undefined && Array.isArray(results.output.probabilities)) {
+          const labels = ['NOT_SPAM', 'SPAM']; // Default labels if not provided in config
+          processedResults.result = labels[results.output.prediction];
           processedResults.confidence = results.output.probabilities[results.output.prediction];
+        }
+        // Case 3: Direct prediction with probabilities object
+        else if (results.output.prediction !== undefined && results.output.probabilities && typeof results.output.probabilities === 'object') {
+          const prediction = Boolean(results.output.prediction);
+          processedResults.result = prediction ? 'SPAM' : 'NOT_SPAM';
+          processedResults.confidence = results.output.probabilities[prediction ? 1 : 0];
+        }
+        // Case 4: Direct string result
+        else if (typeof results.output === 'string') {
+          processedResults.result = results.output;
+          processedResults.confidence = 1.0; // Default confidence for direct output
         }
       }
 
-      // Log success
+      // Validate and normalize confidence
+      if (processedResults.confidence !== null) {
+        processedResults.confidence = Math.max(0, Math.min(1, processedResults.confidence));
+      }
+
+      // Ensure we have a valid result
+      if (processedResults.result === null) {
+        throw new Error('Failed to extract valid prediction from model output');
+      }
+
+      // Log success with normalized output
       logger.info('Inference complete:', processedResults);
       
       if (results.metadata) {
