@@ -85,14 +85,62 @@ class IPFSService {
       throw new Error('IPFS service not initialized');
     }
 
-    const maxRetries = 3;
+    const maxRetries = 5;  // Increased retries
     let lastError = null;
+    
+    // Ensure output directory exists
+    await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         logger.info(`Downloading from IPFS (attempt ${attempt}/${maxRetries}): ${cid}`);
+        logger.debug('IPFS download details:', {
+          gateway: this.pinataGateway,
+          cid: cid,
+          outputPath: outputPath,
+          attempt: attempt
+        });
         
-        // First verify the file exists
+        // Try Pinata gateway first
+        try {
+          const url = `${this.pinataGateway}/${cid}`;
+          logger.info(`Attempting download from URL: ${url}`);
+          const response = await axios.get(url, { 
+            responseType: 'arraybuffer',
+            timeout: 30000, // 30 second timeout
+            headers: {
+              'Accept': '*/*',
+              'User-Agent': 'AI-Model-Marketplace/1.0'
+            }
+          });
+          
+          if (response.status === 200 && response.data) {
+            // Write file with detailed error handling
+            try {
+              await fs.promises.writeFile(outputPath, response.data);
+              
+              // Verify file was written successfully
+              const stats = await fs.promises.stat(outputPath);
+              logger.info(`File written successfully. Size: ${stats.size} bytes`);
+              
+              // Verify file content is valid (not an error page)
+              const firstChunk = response.data.slice(0, 1000).toString('utf8');
+              if (firstChunk.includes('<!DOCTYPE html>') || firstChunk.includes('<html>')) {
+                throw new Error('Downloaded content appears to be HTML/error page instead of model file');
+              }
+              
+              logger.info(`Successfully downloaded file from Pinata: ${cid}`);
+              return;
+            } catch (writeError) {
+              logger.error('Failed to write downloaded file:', writeError);
+              throw writeError;
+            }
+          }
+        } catch (pinataError) {
+          logger.warn(`Pinata download failed: ${pinataError.message}`);
+        }
+        
+        // Fallback to direct IPFS
         const exists = await this.checkFile(cid);
         if (!exists) {
           throw new Error(`File ${cid} not found on IPFS/Pinata`);
@@ -101,9 +149,27 @@ class IPFSService {
         // Try multiple gateways if Pinata fails
         const gateways = [
           this.pinataGateway,
-          'https://ipfs.io/ipfs',
-          'https://cloudflare-ipfs.com/ipfs'
+          'https://cf-ipfs.com/ipfs',  // Cloudflare's dedicated IPFS gateway
+          'https://cloudflare-ipfs.com/ipfs',
+          'https://gateway.ipfs.io/ipfs',
+          'https://ipfs.io/ipfs'
         ];
+
+        // Test gateways first
+        logger.info('Testing IPFS gateways...');
+        const workingGateways = [];
+        for (const gateway of gateways) {
+          if (await this.testGateway(gateway)) {
+            workingGateways.push(gateway);
+            logger.info(`Gateway ${gateway} is accessible ✅`);
+          } else {
+            logger.warn(`Gateway ${gateway} is not accessible ❌`);
+          }
+        }
+
+        if (workingGateways.length === 0) {
+          throw new Error('No working IPFS gateways found');
+        }
 
         let downloaded = false;
         for (const gateway of gateways) {
@@ -163,6 +229,23 @@ class IPFSService {
   }
 
   /**
+   * Check gateway health and accessibility
+   * @param {string} gateway - Gateway URL to test
+   * @returns {Promise<boolean>}
+   */
+  async testGateway(gateway) {
+    try {
+      const response = await axios.get(`${gateway}/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG/readme`, {
+        timeout: 5000
+      });
+      return response.status === 200;
+    } catch (error) {
+      logger.warn(`Gateway ${gateway} health check failed:`, error.message);
+      return false;
+    }
+  }
+
+  /**
    * Check if file exists on IPFS
    * @param {string} cid - IPFS hash (CID)
    * @returns {Promise<boolean>}
@@ -184,6 +267,26 @@ class IPFSService {
     } catch (error) {
       logger.error('Failed to check file on IPFS:', error);
       return false;
+    }
+  }
+
+  /**
+   * Get IPFS hash of a local file
+   * @param {string} filePath - Path to the file
+   * @returns {Promise<string>} IPFS hash (CID)
+   */
+  async getFileHash(filePath) {
+    if (!this.isInitialized) {
+      throw new Error('IPFS service not initialized');
+    }
+
+    try {
+      const fileStream = fs.createReadStream(filePath);
+      const result = await this.pinata.pinFileToIPFS(fileStream, {});
+      return result.IpfsHash;
+    } catch (error) {
+      logger.error('Failed to get file hash:', error);
+      throw error;
     }
   }
 

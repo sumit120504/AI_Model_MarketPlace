@@ -171,42 +171,44 @@ class ModelRunner {
     try {
       logger.info('Running model inference...');
       
-      // Save input to temp file to avoid command line length limits
-      const inputFile = path.join(process.cwd(), 'models', 'temp_input.json');
-      const inputJson = {
-        input: inputData,
-        modelType: this.modelInfo?.type || 'unknown',
-        modelConfig: this.modelInfo?.config || {}
-      };
-      
-      await fs.writeFile(inputFile, JSON.stringify(inputJson, null, 2));
-      
+      // Verify Python environment is ready
+      if (!await this.verifyPythonSetup()) {
+        throw new Error('Python environment is not properly configured');
+      }
+
       const options = {
         mode: 'text',
         pythonPath: this.pythonPath,
         pythonOptions: ['-u'], // unbuffered output
-        scriptPath: __dirname,
-        args: [this.modelPath, inputFile]
+        scriptPath: __dirname
       };
 
       let tempInputFile = null;
       try {
-        // Save input to temp file
-        tempInputFile = path.join(process.cwd(), 'models', 'temp_input.json');
-        const inputJson = {
+        // Create temp input file with unique name to avoid conflicts
+        tempInputFile = path.join(process.cwd(), 'models', `temp_input_${Date.now()}.json`);
+        
+        // Prepare model input configuration
+        const modelConfig = {
           input: inputData,
-          modelType: this.modelInfo?.type || 'unknown',
+          modelType: this.modelInfo?.type || 'text_classification',
           modelConfig: this.modelInfo?.config || {}
         };
-        await fs.writeFile(tempInputFile, JSON.stringify(inputJson, null, 2));
+        
+        await fs.writeFile(tempInputFile, JSON.stringify(modelConfig, null, 2));
+        options.args = [this.modelPath, tempInputFile];
+        
+        logger.info('Running model with options:', {
+          modelPath: this.modelPath,
+          modelType: modelConfig.modelType,
+          pythonPath: this.pythonPath
+        });
 
-        const results = await new Promise((resolve, reject) => {
-          // Create Python shell with error handling
-          const pyshell = new PythonShell('run_model.py', options);
-          let modelOutput = [];
-          let errorOutput = [];
-
-          pyshell.on('message', (message) => {
+    const results = await new Promise((resolve, reject) => {
+      // Create Python shell with error handling
+      const pyshell = new PythonShell('run_model.py', options);
+      let modelOutput = [];
+      let errorOutput = [];          pyshell.on('message', (message) => {
             try {
               // Try to parse as JSON first (it could be the final result)
               const parsed = JSON.parse(message);
@@ -278,14 +280,30 @@ class ModelRunner {
         throw new Error(errorMessage);
       }
 
+      // Process results
+      let processedResults = {
+        success: true,
+        result: null,
+        confidence: null
+      };
+
+      if (results.output && results.output.prediction !== undefined) {
+        processedResults.result = Boolean(results.output.prediction);  // Convert to boolean for spam detection
+        
+        if (results.output.probabilities) {
+          // Get confidence from probability of the predicted class
+          processedResults.confidence = results.output.probabilities[results.output.prediction];
+        }
+      }
+
       // Log success
-      logger.info(`Inference complete: ${JSON.stringify(results.output)}`);
+      logger.info('Inference complete:', processedResults);
       
       if (results.metadata) {
         logger.debug('Inference metadata:', results.metadata);
       }
 
-      return results;
+      return processedResults;
       
     } catch (error) {
       logger.error('Model inference failed:', error);

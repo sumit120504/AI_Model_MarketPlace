@@ -39,15 +39,33 @@ const INFERENCE_MARKET_ABI = [
 ];
 
 const MODEL_REGISTRY_ABI = [
+  // Core View Functions
   "function getModel(uint256 _modelId) external view returns (tuple(uint256 modelId, address creator, string ipfsHash, string name, string description, uint8 category, uint256 pricePerInference, uint256 creatorStake, uint256 totalInferences, uint256 totalEarnings, uint256 reputationScore, uint256 createdAt, bool isActive))",
   "function isModelAvailable(uint256 _modelId) external view returns (bool)",
+  "function getCreatorModels(address _creator) external view returns (uint256[] memory)",
+  "function getActiveModels() external view returns (uint256[] memory)",
+  "function getTotalModels() external view returns (uint256)",
+  
+  // State Changing Functions
+  "function registerModel(string calldata _ipfsHash, string calldata _name, string calldata _description, uint8 _category, uint256 _pricePerInference) external payable returns (uint256)",
   "function recordInference(uint256 _modelId, uint256 _payment) external",
-  "function penalizeModel(uint256 _modelId, uint256 _slashAmount) external"
+  "function penalizeModel(uint256 _modelId, uint256 _slashAmount) external",
+  
+  // Events
+  "event ModelRegistered(uint256 indexed modelId, address indexed creator, string name, uint256 pricePerInference)",
+  "event ModelUpdated(uint256 indexed modelId, uint256 newPrice)",
+  "event ModelDeactivated(uint256 indexed modelId)",
+  "event ModelActivated(uint256 indexed modelId)",
+  "event ReputationUpdated(uint256 indexed modelId, uint256 newScore)",
+  
+  // Constants
+  "function MIN_STAKE() external view returns (uint256)",
+  "function PLATFORM_FEE_PERCENT() external view returns (uint256)"
 ];
 
 // Add constants at the top of the file after imports
 const MIN_GAS_PRICE = ethers.utils.parseUnits('35', 'gwei'); // Increased to 35 Gwei minimum to ensure transactions go through
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 5;
 const RETRY_DELAY = 1000; // 1 second
 
 class BlockchainService {
@@ -184,6 +202,15 @@ class BlockchainService {
   async getModel(modelId) {
     try {
       const model = await this.modelRegistry.getModel(modelId);
+      const isAvailable = await this.modelRegistry.isModelAvailable(modelId);
+      
+      // Map category to human-readable name
+      const categories = [
+        'TEXT_CLASSIFICATION',
+        'IMAGE_CLASSIFICATION',
+        'SENTIMENT_ANALYSIS',
+        'OTHER'
+      ];
       
       return {
         modelId: model.modelId.toString(),
@@ -191,9 +218,18 @@ class BlockchainService {
         ipfsHash: model.ipfsHash,
         name: model.name,
         description: model.description,
-        category: model.category,
+        category: {
+          id: model.category,
+          name: categories[model.category]
+        },
         pricePerInference: ethers.utils.formatEther(model.pricePerInference),
-        isActive: model.isActive
+        creatorStake: ethers.utils.formatEther(model.creatorStake),
+        totalInferences: model.totalInferences.toString(),
+        totalEarnings: ethers.utils.formatEther(model.totalEarnings),
+        reputationScore: model.reputationScore.toNumber(),
+        createdAt: new Date(model.createdAt.toNumber() * 1000).toISOString(),
+        isActive: model.isActive,
+        isAvailable: isAvailable // Includes both active status and sufficient stake check
       };
     } catch (error) {
       logger.error(`Failed to get model #${modelId}:`, error);
@@ -202,20 +238,31 @@ class BlockchainService {
   }
   
   /**
-   * Get current network gas settings with minimum values enforced
+   * Get current network gas settings with a small incremental increase per attempt
+   * @param {number} attempt - retry attempt index (0-based)
    */
-  async getGasSettings() {
-    const feeData = await this.provider.getFeeData();
+  /**
+ * Get recommended gas settings dynamically
+ */
+  async getGasSettings(attempt = 0) {
+    // Use exact minimum tip required by network
+    const minTipCap = ethers.BigNumber.from('25000000000'); // 25 Gwei in wei
+    const block = await this.provider.getBlock('latest');
+    const baseFee = block.baseFeePerGas || minTipCap;
     
-    // Always use at least MIN_GAS_PRICE
-    const maxPriorityFeePerGas = ethers.BigNumber.from(MIN_GAS_PRICE);
-    const maxFeePerGas = maxPriorityFeePerGas.mul(2); // Double the priority fee for max fee
+    // Increase tip by 25 Gwei per attempt
+    const tipIncrease = ethers.utils.parseUnits(String(attempt * 25), 'gwei');
+    const maxPriorityFeePerGas = minTipCap.add(tipIncrease);
+    
+    // Set max fee to double base fee plus priority fee
+    const maxFeePerGas = baseFee.mul(2).add(maxPriorityFeePerGas);
     
     return {
-      maxFeePerGas: maxFeePerGas,
-      maxPriorityFeePerGas: maxPriorityFeePerGas,
+      type: 2, // EIP-1559
+      maxFeePerGas,
+      maxPriorityFeePerGas,
       gasLimit: config.gasLimit,
-      type: 2 // Explicitly set EIP-1559 transaction type
+      nonce: await this.wallet.getTransactionCount()
     };
   }
 
@@ -224,15 +271,65 @@ class BlockchainService {
    */
   async executeWithRetry(operation) {
     let lastError;
-    for (let i = 0; i < MAX_RETRIES; i++) {
-      try {
-        const gasSettings = await this.getGasSettings();
-        return await operation(gasSettings);
-      } catch (error) {
-        lastError = error;
-        logger.warn(`Attempt ${i + 1}/${MAX_RETRIES} failed: ${error.message}`);
-        if (i < MAX_RETRIES - 1) {
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+    
+    // List of backup RPC URLs to try (Amoy testnet-first)
+    // Order: primary Amoy RPC, public fallback endpoints, then other public providers
+    const rpcUrls = config.rpcUrls;
+    for (const rpcUrl of rpcUrls) {
+      // Update provider URL
+      this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+      this.wallet = new ethers.Wallet(config.privateKey, this.provider);
+      // Create signer that enforces high gas values
+      const enforceMinGasSigner = {
+        ...this.wallet,
+        sendTransaction: async (tx) => {
+          // Start with high values to ensure transaction goes through
+          const tipCap = ethers.utils.parseUnits('100', 'gwei');
+          const baseFee = ethers.utils.parseUnits('100', 'gwei');
+          const eip1559Tx = {
+            ...tx,
+            type: 2, // EIP-1559
+            chainId: config.chainId,
+            maxPriorityFeePerGas: tipCap,
+            maxFeePerGas: baseFee.mul(2).add(tipCap),
+            gasPrice: undefined
+          };
+          return this.wallet.sendTransaction(eip1559Tx);
+        }
+      };
+      this.inferenceMarket = new ethers.Contract(
+        config.inferenceMarketAddress,
+        INFERENCE_MARKET_ABI,
+        enforceMinGasSigner
+      );
+      this.modelRegistry = new ethers.Contract(
+        config.modelRegistryAddress,
+        MODEL_REGISTRY_ABI,
+        enforceMinGasSigner
+      );
+      // Try operation with current RPC
+      for (let i = 0; i < MAX_RETRIES; i++) {
+        try {
+          // Get gas settings with increased price for each retry
+          const baseGwei = 25; // Network minimum
+          const increasedGwei = baseGwei + (i * 50); // Increase by 50 Gwei each retry
+          const gasPrice = ethers.utils.parseUnits(String(increasedGwei), 'gwei');
+          // Construct legacy transaction settings
+          const gasSettings = {
+            gasPrice,
+            gasLimit: config.gasLimit,
+            nonce: await this.wallet.getTransactionCount()
+          };
+          // TODO: Future improvement: If tx is stuck (timeout), automatically replace with higher-fee tx using same nonce (replacement tx logic)
+          // Call operation with our settings
+          const result = await operation(gasSettings);
+          return result;
+        } catch (error) {
+          lastError = error;
+          logger.warn(`Attempt ${i + 1}/${MAX_RETRIES} with ${rpcUrl} failed: ${error.message}`);
+          if (i < MAX_RETRIES - 1) {
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          }
         }
       }
     }
@@ -246,7 +343,10 @@ class BlockchainService {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Picking up request #${requestId}...`);
       
-      const tx = await this.inferenceMarket.pickupRequest(requestId, gasSettings);
+      const tx = await this.inferenceMarket.pickupRequest(requestId, {
+        ...gasSettings,
+        nonce: await this.wallet.getTransactionCount()
+      });
       logger.logTransaction(tx.hash, `Pickup request #${requestId}`);
       
       const receipt = await tx.wait();
@@ -300,15 +400,40 @@ class BlockchainService {
    */
   async reportFailure(requestId, reason) {
     return this.executeWithRetry(async (gasSettings) => {
-      logger.warn(`Reporting failure for request #${requestId}: ${reason}`);
+      logger.info(`Reporting failure for request #${requestId}...`);
       
-      const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
-      logger.logTransaction(tx.hash, `Report failure #${requestId}`);
-      
-      const receipt = await tx.wait();
-      logger.info(`✅ Failure reported for #${requestId}`);
-      
-      return { success: true, txHash: tx.hash, receipt };
+      try {
+        // Get request details first
+        const request = await this.inferenceMarket.getRequest(requestId);
+        if (!request || request.status !== 1) { // 1 = COMPUTING
+          throw new Error('Invalid request state for failure reporting');
+        }
+        
+        // Report failure which triggers refund
+        const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
+        logger.logTransaction(tx.hash, `Report failure for request #${requestId}`);
+        
+        const receipt = await tx.wait();
+        
+        // Verify refund event
+        const refundEvent = receipt.events?.find(e => e.event === 'UserRefunded');
+        const failureEvent = receipt.events?.find(e => e.event === 'InferenceFailed');
+        
+        if (refundEvent && failureEvent) {
+          logger.info(`✅ Failure reported and refund processed for request #${requestId}`);
+          return { 
+            success: true, 
+            txHash: tx.hash, 
+            receipt,
+            refundAmount: ethers.utils.formatEther(refundEvent.args.amount)
+          };
+        } else {
+          throw new Error('Required events not found in transaction receipt');
+        }
+      } catch (error) {
+        logger.error(`Failed to report failure for request #${requestId}:`, error);
+        throw error;
+      }
     });
   }
 
@@ -434,6 +559,77 @@ class BlockchainService {
       
       return { success: true, txHash: tx.hash, receipt };
     });
+  }
+
+  /**
+   * Get all models created by a specific address
+   */
+  async getCreatorModels(creatorAddress) {
+    try {
+      const modelIds = await this.modelRegistry.getCreatorModels(creatorAddress);
+      const models = await Promise.all(
+        modelIds.map(id => this.getModel(id.toString()))
+      );
+      return models;
+    } catch (error) {
+      logger.error(`Failed to get models for creator ${creatorAddress}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all active models in the marketplace
+   */
+  async getActiveModels() {
+    try {
+      const modelIds = await this.modelRegistry.getActiveModels();
+      const models = await Promise.all(
+        modelIds.map(id => this.getModel(id.toString()))
+      );
+      return models;
+    } catch (error) {
+      logger.error('Failed to get active models:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get total number of registered models
+   */
+  async getTotalModels() {
+    try {
+      const total = await this.modelRegistry.getTotalModels();
+      return total.toString();
+    } catch (error) {
+      logger.error('Failed to get total models:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Check if a model is available for inference
+   * This checks both active status and sufficient stake
+   */
+  async isModelAvailable(modelId) {
+    try {
+      return await this.modelRegistry.isModelAvailable(modelId);
+    } catch (error) {
+      logger.error(`Failed to check model ${modelId} availability:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get minimum stake required for models
+   */
+  async getMinStake() {
+    try {
+      const minStake = await this.modelRegistry.MIN_STAKE();
+      return ethers.utils.formatEther(minStake);
+    } catch (error) {
+      logger.error('Failed to get minimum stake:', error);
+      throw error;
+    }
   }
 }
 

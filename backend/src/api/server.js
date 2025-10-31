@@ -1,4 +1,7 @@
 import express from 'express';
+import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { config } from '../config/config.js';
@@ -47,8 +50,11 @@ class APIServer {
       next();
     });
     
-    // Routes
-    this.setupRoutes();
+  // File upload middleware (for model uploads)
+  this.upload = multer({ dest: path.join(process.cwd(), 'uploads/') });
+
+  // Routes
+  this.setupRoutes();
     
     // Error handling
     this.app.use(this.errorHandler);
@@ -58,6 +64,25 @@ class APIServer {
    * Setup API routes
    */
   setupRoutes() {
+    // Model file upload endpoint
+    this.app.post('/api/upload-model', this.upload.single('file'), async (req, res) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: 'No file uploaded' });
+        }
+        // Ensure IPFS service is initialized
+        if (!this.ipfsService.isInitialized) {
+          await this.ipfsService.initialize();
+        }
+        const filePath = req.file.path;
+        const ipfsHash = await this.ipfsService.uploadFile(filePath);
+        // Remove temp file
+        fs.unlink(filePath, () => {});
+        res.json({ ipfsHash });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
     // Health check
     this.app.get('/health', (req, res) => {
       res.json({

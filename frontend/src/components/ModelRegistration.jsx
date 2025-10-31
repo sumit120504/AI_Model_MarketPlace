@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useWeb3 } from '../context/Web3Context';
 import { X, Upload, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -16,6 +16,33 @@ function ModelRegistration({ isOpen, onClose }) {
   });
   
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef();
+  // Upload model file to backend (or IPFS proxy)
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    try {
+      // Adjust the endpoint as needed for your backend
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-model', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      const data = await res.json();
+      if (!data.ipfsHash) throw new Error('No IPFS hash returned');
+      setFormData(prev => ({ ...prev, ipfsHash: data.ipfsHash }));
+      toast.success('Model uploaded to IPFS!');
+    } catch (err) {
+      toast.error('Upload failed: ' + err.message);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const categories = [
     { value: 0, label: 'Text Classification' },
@@ -203,9 +230,9 @@ function ModelRegistration({ isOpen, onClose }) {
             {/* IPFS Hash */}
             <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                IPFS Hash *
+                Model File Upload (IPFS) *
               </label>
-              <div className="flex space-x-2">
+              <div className="flex flex-col md:flex-row md:space-x-2 space-y-2 md:space-y-0">
                 <input
                   type="text"
                   name="ipfsHash"
@@ -214,18 +241,30 @@ function ModelRegistration({ isOpen, onClose }) {
                   placeholder="QmXxx..."
                   className="input flex-1"
                   required
+                  readOnly={isUploading}
+                />
+                <input
+                  type="file"
+                  accept=".pt,.pth,.onnx,.h5,.joblib,.pkl,.zip,.tar,.gz,.pb,.tflite,.bin,.model,.sav,.pkl,.pickle,.txt,.json"
+                  className="input"
+                  style={{ maxWidth: 220 }}
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  disabled={isUploading}
                 />
                 <button
                   type="button"
                   className="btn-outline flex items-center space-x-2"
-                  onClick={() => toast.info('IPFS upload feature coming soon!')}
+                  onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                  disabled={isUploading}
                 >
-                  <Upload className="h-4 w-4" />
-                  <span>Upload</span>
+                  {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  <span>{isUploading ? 'Uploading...' : 'Upload'}</span>
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-1">
-                Upload your model file to IPFS and paste the hash here
+                Upload your model file. The IPFS hash will be filled automatically.<br/>
+                Or paste an existing IPFS hash above.
               </p>
             </div>
 

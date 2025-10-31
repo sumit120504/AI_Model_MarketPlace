@@ -131,8 +131,20 @@ def run_inference(model: Any, preprocessed_input: Any, model_type: str) -> Dict:
             return output.tolist()
             
         elif hasattr(model, 'predict'):
-            # scikit-learn style
-            output = model.predict(preprocessed_input)
+            # scikit-learn style with proper input handling
+            if isinstance(preprocessed_input, str):
+                # Wrap single string in a list for scikit-learn
+                output = model.predict([preprocessed_input])
+            else:
+                output = model.predict(preprocessed_input)
+            
+            # For probabilities
+            if hasattr(model, 'predict_proba'):
+                probas = model.predict_proba([preprocessed_input])[0] if isinstance(preprocessed_input, str) else model.predict_proba(preprocessed_input)
+                return {
+                    'prediction': output[0] if isinstance(preprocessed_input, str) else output,
+                    'probabilities': probas.tolist()
+                }
             return output.tolist() if isinstance(output, np.ndarray) else output
             
         elif hasattr(model, 'run'):
@@ -184,27 +196,40 @@ def postprocess_output(output: Any, model_type: str, config: Dict) -> Dict:
 def main():
     try:
         if len(sys.argv) != 3:
-            raise ValueError("Expected model_path and input_json arguments")
+            raise ValueError("Expected model_path and input_json_path arguments")
             
         model_path = sys.argv[1]
-        input_json = json.loads(sys.argv[2])
+        input_json_path = sys.argv[2]
+        
+        # Read input JSON from file
+        try:
+            with open(input_json_path, 'r') as f:
+                input_json = json.load(f)
+        except Exception as e:
+            raise ValueError(f"Failed to read input JSON file: {str(e)}")
         
         # Extract input data and metadata
         input_data = input_json['input']
         model_type = input_json['modelType']
         model_config = input_json['modelConfig']
         
-        # Load model
+        print("Starting model pipeline...")
+        
+        print("Loading model...")
         model = load_model(model_path, model_type)
+        print("Model loaded successfully")
         
-        # Preprocess
+        print("Preprocessing input...")
         preprocessed_input = preprocess_input(input_data, model_type, model_config)
+        print(f"Input preprocessed, shape: {np.array(preprocessed_input).shape if hasattr(preprocessed_input, 'shape') else 'N/A'}")
         
-        # Run inference
+        print("Running inference...")
         raw_output = run_inference(model, preprocessed_input, model_type)
+        print("Inference complete")
         
-        # Postprocess
+        print("Postprocessing output...")
         processed_output = postprocess_output(raw_output, model_type, model_config)
+        print("Postprocessing complete")
         
         # Return results
         result = {

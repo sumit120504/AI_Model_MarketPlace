@@ -2,7 +2,15 @@ import 'dotenv/config';
 
 const config = {
   // Blockchain
-  rpcUrl: process.env.RPC_URL || 'https://rpc-mumbai.maticvigil.com',
+  rpcUrls: [
+    process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
+    'https://polygon-amoy.drpc.org',
+    'https://polygon-amoy-bor-rpc.publicnode.com',
+    'https://polygon-amoy-heimdall-rpc.publicnode.com',
+    // Add managed endpoints (Tenderly/Alchemy/QuickNode/Chainstack) for production
+    // 'https://polygon-amoy.gateway.tenderly.co/<ACCESS_KEY>',
+  ],
+  rpcUrl: process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
   chainId: parseInt(process.env.CHAIN_ID) || 80001,
   networkName: process.env.NETWORK_NAME || 'mumbai',
   
@@ -62,6 +70,11 @@ function validateConfig() {
   
   if (!config.inferenceMarketAddress.startsWith('0x')) {
     throw new Error('Invalid inferenceMarketAddress');
+  }
+
+  // Validate IPFS configuration
+  if (!config.ipfsApiKey || !config.ipfsSecretKey) {
+    throw new Error('Missing Pinata API credentials (PINATA_API_KEY and PINATA_SECRET_KEY)');
   }
   
   console.log('✅ Configuration validated');
