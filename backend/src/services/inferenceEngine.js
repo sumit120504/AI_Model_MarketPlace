@@ -268,6 +268,41 @@ class InferenceEngine {
           throw new Error('Result submitted but payment not processed');
         }
         
+        // Persist result data locally for API retrieval (and optionally pin to IPFS)
+        try {
+          const resultsDir = path.join(process.cwd(), 'data', 'results');
+          await fs.promises.mkdir(resultsDir, { recursive: true });
+          const resultFile = path.join(resultsDir, `${requestId}.json`);
+          const resultPayload = {
+            requestId,
+            modelId: requestDetails.modelId,
+            result: result.result,
+            confidence: result.confidence,
+            metadata: result.metadata || null,
+            timestamp: Date.now()
+          };
+
+          await fs.promises.writeFile(resultFile, JSON.stringify(resultPayload, null, 2), 'utf8');
+          logger.info(`[Request #${requestId}] Result saved to ${resultFile}`);
+
+          // Optionally upload result to IPFS if service is initialized
+          if (this.ipfsService && this.ipfsService.isInitialized) {
+            try {
+              const ipfsHash = await this.ipfsService.uploadFile(resultFile);
+              logger.info(`[Request #${requestId}] Result pinned to IPFS: ${ipfsHash}`);
+              // Cache pointer so API/indexer can find it quickly
+              this.cache.set(`result_${requestId}`, { ipfsHash, localPath: resultFile });
+            } catch (ipfsErr) {
+              logger.warn(`[Request #${requestId}] Failed to pin result to IPFS: ${ipfsErr.message}`);
+            }
+          } else {
+            // Cache local path only
+            this.cache.set(`result_${requestId}`, { localPath: resultFile });
+          }
+        } catch (persistErr) {
+          logger.warn(`[Request #${requestId}] Failed to persist result: ${persistErr.message}`);
+        }
+
         // Update stats
         this.stats.successful++;
         this.stats.totalProcessed++;

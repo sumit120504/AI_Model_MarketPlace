@@ -9,6 +9,7 @@ function ModelDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { getModel, requestInference, isConnected } = useWeb3();
+  const BACKEND_API = process.env.REACT_APP_BACKEND_API_URL || import.meta.env.VITE_BACKEND_API_URL;
   
   const [model, setModel] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -65,41 +66,47 @@ function ModelDetails() {
   async function startPolling(requestId) {
     const MAX_ATTEMPTS = 30; // 30 x 2 seconds = 1 minute max
     let attempts = 0;
-    
     const interval = setInterval(async () => {
       try {
         attempts++;
-        const request = await inferenceMarket.getRequest(requestId);
-        
-        // Check if request is completed
-        if (request.status === 2) { // Completed
+
+        // Prefer backend API which can return the result payload saved by compute node
+        const resp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/requests/${requestId}`);
+        if (!resp.ok) throw new Error('Failed to fetch request status');
+        const request = await resp.json();
+
+        // Completed status (2 = COMPLETED)
+        if (request.status === '2' || request.status === 2 || request.statusText === 'COMPLETED') {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
-          
-          // Get result from blockchain
-          const resultData = request.resultData;
+
+          const resultData = request.resultData || {};
           setResult({
             requestId,
-            result: resultData.result,
-            confidence: resultData.confidence
+            result: resultData.result || (resultData.output?.label || 'UNKNOWN'),
+            confidence: resultData.confidence || (resultData.output?.confidence || 0)
           });
-          
+
           toast.success('Inference completed!');
+          return;
         }
-        // Check if request failed
-        else if (request.status === 3) { // Failed
+
+        // Failed
+        if (request.status === '3' || request.statusText === 'FAILED') {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
-          toast.error('Inference failed: ' + (request.errorMessage || 'Unknown error'));
+          toast.error('Inference failed: ' + (request.failureReason || 'Unknown error'));
+          return;
         }
-        // Stop polling after max attempts
-        else if (attempts >= MAX_ATTEMPTS) {
+
+        if (attempts >= MAX_ATTEMPTS) {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
           toast.error('Request timed out. Please try again.');
+          return;
         }
       } catch (error) {
         console.error('Error polling for result:', error);
@@ -108,7 +115,7 @@ function ModelDetails() {
         setProcessing(false);
         toast.error('Failed to get result');
       }
-    }, 1000);
+    }, 2000);
     
     setPollingInterval(interval);
     window.requestStartTime = Date.now();
