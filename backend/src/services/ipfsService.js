@@ -85,24 +85,81 @@ class IPFSService {
       throw new Error('IPFS service not initialized');
     }
 
-    try {
-      const response = await axios({
-        method: 'get',
-        url: `${this.pinataGateway}/${cid}`,
-        responseType: 'stream'
-      });
+    const maxRetries = 3;
+    let lastError = null;
 
-      const writer = fs.createWriteStream(outputPath);
-      response.data.pipe(writer);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`Downloading from IPFS (attempt ${attempt}/${maxRetries}): ${cid}`);
+        
+        // First verify the file exists
+        const exists = await this.checkFile(cid);
+        if (!exists) {
+          throw new Error(`File ${cid} not found on IPFS/Pinata`);
+        }
 
-      return new Promise((resolve, reject) => {
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-      });
-    } catch (error) {
-      logger.error('Failed to download file from IPFS:', error);
-      throw error;
+        // Try multiple gateways if Pinata fails
+        const gateways = [
+          this.pinataGateway,
+          'https://ipfs.io/ipfs',
+          'https://cloudflare-ipfs.com/ipfs'
+        ];
+
+        let downloaded = false;
+        for (const gateway of gateways) {
+          try {
+            const response = await axios({
+              method: 'get',
+              url: `${gateway}/${cid}`,
+              responseType: 'stream',
+              timeout: 30000 // 30 second timeout
+            });
+
+            // Ensure the directory exists
+            const dir = path.dirname(outputPath);
+            await fs.promises.mkdir(dir, { recursive: true });
+
+            const writer = fs.createWriteStream(outputPath);
+            response.data.pipe(writer);
+
+            await new Promise((resolve, reject) => {
+              writer.on('finish', resolve);
+              writer.on('error', reject);
+            });
+
+            // Verify file was created and has content
+            const stats = await fs.promises.stat(outputPath);
+            if (stats.size === 0) {
+              throw new Error('Downloaded file is empty');
+            }
+
+            logger.info(`Successfully downloaded ${cid} from ${gateway}`);
+            downloaded = true;
+            break;
+          } catch (gatewayError) {
+            logger.warn(`Failed to download from ${gateway}:`, gatewayError.message);
+            continue;
+          }
+        }
+
+        if (!downloaded) {
+          throw new Error('All IPFS gateways failed');
+        }
+
+        return;
+      } catch (error) {
+        lastError = error;
+        logger.error(`Download attempt ${attempt} failed:`, error.message);
+        
+        if (attempt < maxRetries) {
+          const delay = attempt * 2000; // Exponential backoff
+          logger.info(`Retrying in ${delay/1000} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
+
+    throw new Error(`Failed to download after ${maxRetries} attempts: ${lastError.message}`);
   }
 
   /**

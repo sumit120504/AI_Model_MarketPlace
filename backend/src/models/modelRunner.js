@@ -171,46 +171,106 @@ class ModelRunner {
     try {
       logger.info('Running model inference...');
       
+      // Save input to temp file to avoid command line length limits
+      const inputFile = path.join(process.cwd(), 'models', 'temp_input.json');
+      const inputJson = {
+        input: inputData,
+        modelType: this.modelInfo?.type || 'unknown',
+        modelConfig: this.modelInfo?.config || {}
+      };
+      
+      await fs.writeFile(inputFile, JSON.stringify(inputJson, null, 2));
+      
       const options = {
         mode: 'text',
         pythonPath: this.pythonPath,
         pythonOptions: ['-u'], // unbuffered output
         scriptPath: __dirname,
-        args: [
-          this.modelPath,
-          JSON.stringify({
-            input: inputData,
-            modelType: this.modelInfo?.type || 'unknown',
-            modelConfig: this.modelInfo?.config || {}
-          })
-        ]
+        args: [this.modelPath, inputFile]
       };
 
-      const results = await new Promise((resolve, reject) => {
-        PythonShell.run('run_model.py', options, (err, output) => {
-          if (err) {
-            logger.error('Model execution error:', err);
-            reject(err);
-            return;
-          }
-          
-          try {
-            // Get last line of output (in case there are debug/info messages)
-            const lastLine = output[output.length - 1];
-            const result = JSON.parse(lastLine);
-            
-            // Log any debug messages from model
-            if (output.length > 1) {
-              output.slice(0, -1).forEach(line => logger.debug('Model output:', line));
+      let tempInputFile = null;
+      try {
+        // Save input to temp file
+        tempInputFile = path.join(process.cwd(), 'models', 'temp_input.json');
+        const inputJson = {
+          input: inputData,
+          modelType: this.modelInfo?.type || 'unknown',
+          modelConfig: this.modelInfo?.config || {}
+        };
+        await fs.writeFile(tempInputFile, JSON.stringify(inputJson, null, 2));
+
+        const results = await new Promise((resolve, reject) => {
+          // Create Python shell with error handling
+          const pyshell = new PythonShell('run_model.py', options);
+          let modelOutput = [];
+          let errorOutput = [];
+
+          pyshell.on('message', (message) => {
+            try {
+              // Try to parse as JSON first (it could be the final result)
+              const parsed = JSON.parse(message);
+              if (parsed.success !== undefined) {
+                // This is our final result object
+                resolve(parsed);
+              } else {
+                // It's a progress/debug message
+                modelOutput.push(message);
+                logger.debug('Model output:', message);
+              }
+            } catch {
+              // Not JSON, treat as debug output
+              modelOutput.push(message);
+              logger.debug('Model debug:', message);
             }
-            
-            resolve(result);
-          } catch (parseError) {
-            logger.error('Failed to parse model output:', output);
-            reject(new Error('Failed to parse model output: ' + parseError.message));
-          }
+          });
+
+          pyshell.on('stderr', (err) => {
+            errorOutput.push(err);
+            logger.error('Model stderr:', err);
+          });
+
+          pyshell.on('error', (err) => {
+            logger.error('Python shell error:', err);
+            reject(new Error(`Model execution failed: ${err.message}\nDebug output: ${modelOutput.join('\n')}\nError output: ${errorOutput.join('\n')}`));
+          });
+
+          pyshell.on('close', () => {
+            if (modelOutput.length === 0) {
+              reject(new Error('No output received from model'));
+            }
+          });
+
+          // Set timeout for model execution
+          const timeout = setTimeout(() => {
+            pyshell.kill();
+            reject(new Error('Model execution timed out after 30 seconds'));
+          }, 30000);
+
+          pyshell.end((err) => {
+            clearTimeout(timeout);
+            if (err) {
+              logger.error('Python script error:', err);
+              reject(new Error(`Model execution failed: ${err.message}\nDebug output: ${modelOutput.join('\n')}\nError output: ${errorOutput.join('\n')}`));
+            }
+          });
         });
-      });
+
+        return results;
+
+      } catch (error) {
+        logger.error('Model execution error:', error);
+        throw new Error(`Model execution failed: ${error.message}`);
+      } finally {
+        // Cleanup temp input file
+        if (tempInputFile) {
+          try {
+            await fs.unlink(tempInputFile);
+          } catch (cleanupError) {
+            logger.warn('Failed to cleanup temp input file:', cleanupError);
+          }
+        }
+      }
 
       if (!results.success) {
         const errorMessage = results.error || 'Model execution failed';

@@ -8,31 +8,73 @@ import pickle
 import numpy as np
 from typing import Any, Dict, Union
 
+def verify_model_file(model_path: str) -> bool:
+    """Verify model file exists and is valid"""
+    try:
+        path = Path(model_path)
+        if not path.exists():
+            raise ValueError(f"Model file not found: {model_path}")
+            
+        if path.stat().st_size == 0:
+            raise ValueError(f"Model file is empty: {model_path}")
+            
+        # Read first few bytes to check if file is valid
+        with open(model_path, 'rb') as f:
+            header = f.read(10)
+            if len(header) == 0:
+                raise ValueError(f"Model file is corrupted: {model_path}")
+                
+        return True
+    except Exception as e:
+        raise ValueError(f"Model file verification failed: {str(e)}")
+
 def load_model(model_path: str, model_type: str) -> Any:
     """Load model based on type and file extension"""
     try:
+        # First verify the model file
+        verify_model_file(model_path)
+        
         ext = Path(model_path).suffix.lower()
+        print(f"Loading model from {model_path} with type {model_type}")
         
         if ext == '.pt' or ext == '.pth':
-            model = torch.load(model_path)
-            model.eval()  # Set to inference mode
-            return model
+            try:
+                model = torch.load(model_path, map_location='cpu')
+                if hasattr(model, 'eval'):
+                    model.eval()  # Set to inference mode
+                return model
+            except Exception as e:
+                raise ValueError(f"Failed to load PyTorch model: {str(e)}")
             
         elif ext == '.h5' or ext == '.keras':
-            return tf.keras.models.load_model(model_path)
+            try:
+                return tf.keras.models.load_model(model_path)
+            except Exception as e:
+                raise ValueError(f"Failed to load Keras model: {str(e)}")
             
         elif ext == '.pkl' or ext == '.pickle':
-            with open(model_path, 'rb') as f:
-                return pickle.load(f)
+            try:
+                with open(model_path, 'rb') as f:
+                    model = pickle.load(f)
+                # Verify it has a predict method
+                if not hasattr(model, 'predict'):
+                    raise ValueError("Loaded pickle file does not have a predict method")
+                return model
+            except Exception as e:
+                raise ValueError(f"Failed to load pickle model: {str(e)}")
                 
         elif ext == '.onnx':
-            import onnxruntime as ort
-            return ort.InferenceSession(model_path)
+            try:
+                import onnxruntime as ort
+                return ort.InferenceSession(model_path)
+            except Exception as e:
+                raise ValueError(f"Failed to load ONNX model: {str(e)}")
             
         else:
             raise ValueError(f"Unsupported model format: {ext}")
             
     except Exception as e:
+        print(f"Error loading model: {str(e)}")
         raise Exception(f"Failed to load model: {str(e)}")
 
 def preprocess_input(input_data: Union[str, Dict, list], model_type: str, config: Dict) -> Any:
