@@ -418,11 +418,38 @@ export function Web3Provider({ children }) {
         }
         
         const priceInWei = ethers.utils.parseEther(model.price);
-        
-        // Generate input hash
-        const inputHash = ethers.utils.keccak256(
-          ethers.utils.toUtf8Bytes(inputText)
-        );
+
+        // First upload input content to backend IPFS proxy so compute nodes can fetch it.
+        // Backend will pin the content, compute keccak256 and cache mapping (inputHash -> content).
+        const BACKEND_API = process.env.REACT_APP_BACKEND_API_URL || import.meta.env.VITE_BACKEND_API_URL;
+        let inputHash;
+
+        try {
+          if (!BACKEND_API) {
+            throw new Error('Backend API URL not configured');
+          }
+
+          const resp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/ipfs/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: inputText, filename: `input_${Date.now()}.json` })
+          });
+
+          if (!resp.ok) {
+            const errText = await resp.text();
+            throw new Error(`IPFS upload failed: ${errText}`);
+          }
+
+          const data = await resp.json();
+          // Expect backend to return inputHash (bytes32) and ipfsHash (CID)
+          if (!data || !data.inputHash) {
+            throw new Error('Backend did not return inputHash');
+          }
+          inputHash = data.inputHash;
+        } catch (uploadErr) {
+          console.error('Failed to upload input to backend IPFS proxy:', uploadErr);
+          throw uploadErr;
+        }
         
         // Add explicit gas limit to avoid estimation issues
         const tx = await inferenceMarket.requestInference(

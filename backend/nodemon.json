@@ -1,0 +1,23 @@
+{
+  "ignore": [
+    "models/",
+    "models/temp/*",
+    "models/temp_*",
+    "models/downloaded/*",
+    "uploads/*",
+    "*.test.js",
+    "data/*",
+    "logs/*",
+    "temp/*",
+    "temp_*",
+    "**/temp/*",
+    "**/temp_*",
+    "**/temp_*.json",
+    "**/temp_input_*.json",
+    "**/downloaded/*",
+    "**/uploads/*"
+  ],
+  "ext": "js,json",
+  "watch": ["src"],
+  "exec": "node src/index.js"
+}

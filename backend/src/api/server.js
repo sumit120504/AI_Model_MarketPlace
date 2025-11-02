@@ -223,16 +223,69 @@ class APIServer {
     });
     
     // IPFS endpoints
+    // Upload arbitrary content to IPFS and register mapping (content -> keccak hash)
+    // Accepts JSON body: { content: string, filename?: string }
     this.app.post('/ipfs/upload', async (req, res) => {
       try {
         const { content, filename } = req.body;
-        
+
         if (!content) {
           return res.status(400).json({ error: 'Content required' });
         }
-        
-        const hash = await this.ipfsService.uploadFile(content, filename || 'file');
-        res.json({ hash, gateway: config.ipfsGateway });
+
+        // Ensure IPFS service initialized
+        if (!this.ipfsService.isInitialized) {
+          await this.ipfsService.initialize();
+        }
+
+        // Write content to a temp file outside workspace so nodemon doesn't detect it
+        const tempDir = path.join(process.env.TEMP || '/tmp', 'ai-marketplace-temp');
+        try {
+          await fs.promises.mkdir(tempDir, { recursive: true });
+        } catch (mkdirErr) {
+          logger.error('Failed to create temp directory:', mkdirErr);
+          throw new Error('Server error: Failed to create temp directory');
+        }
+        const safeFilename = (filename && filename.replace(/[^a-zA-Z0-9_.-]/g, '_')) || `input_${Date.now()}.json`;
+        const tempPath = path.join(tempDir, safeFilename);
+
+        // If content is an object, stringify it
+        const toWrite = typeof content === 'string' ? content : JSON.stringify(content);
+        await fs.promises.writeFile(tempPath, toWrite, 'utf8');
+
+        // Upload to IPFS
+        const ipfsHash = await this.ipfsService.uploadFile(tempPath);
+
+        // Clean up temp file
+        let inputHash;
+        try {
+          // Compute keccak256 hash first in case file operations fail
+          inputHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(toWrite));
+          
+          // Then try to clean up temp file
+          await fs.promises.unlink(tempPath);
+        } catch (e) {
+          // Log cleanup error but don't fail the request
+          logger.warn('Failed to clean up temp file:', e);
+        }
+
+        if (!inputHash) {
+          throw new Error('Failed to compute content hash');
+        }
+
+        // Cache mapping so compute nodes can resolve the keccak hash to the original content quickly
+        try {
+          if (this.engine && this.engine.cache) {
+            // Cache the raw input data under the bytes32 key so getInputData() can use it
+            this.engine.cache.set(inputHash, toWrite);
+            // Also store the CID for reference
+            this.engine.cache.set(`cid_${inputHash}`, ipfsHash);
+          }
+        } catch (cacheErr) {
+          logger.warn('Failed to cache input mapping:', cacheErr.message);
+        }
+
+        res.json({ ipfsHash, inputHash, gateway: config.ipfsGateway });
       } catch (error) {
         res.status(500).json({ error: error.message });
       }
