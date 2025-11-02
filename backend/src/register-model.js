@@ -12,7 +12,7 @@ async function registerSpamModel() {
         await ipfsService.initialize();
 
         // Upload model to IPFS
-        const modelPath = path.join(process.cwd(), 'models', 'downloaded', 'spam_detector.pkl');
+        const modelPath = path.join(process.cwd(), 'models', 'downloaded', '2.pkl');
         logger.info('Uploading model to IPFS:', modelPath);
         const ipfsHash = await ipfsService.uploadFile(modelPath);
         logger.info('Model uploaded to IPFS with hash:', ipfsHash);
@@ -23,7 +23,7 @@ async function registerSpamModel() {
         }
 
         const modelDetails = {
-            name: "Smart Spam Classifier v1",
+            name: "Spam Detective",
             description: "Advanced ML model for detecting spam with high accuracy. Uses natural language processing and machine learning to identify spam patterns.",
             category: 0, // TEXT_CLASSIFICATION
             pricePerInference: ethers.utils.parseEther("0.001"), // 0.001 MATIC per inference

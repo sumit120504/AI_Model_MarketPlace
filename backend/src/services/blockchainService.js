@@ -65,7 +65,6 @@ const MODEL_REGISTRY_ABI = [
 ];
 
 // Add constants at the top of the file after imports
-const MIN_GAS_PRICE = ethers.utils.parseUnits('35', 'gwei'); // Increased to 35 Gwei minimum to ensure transactions go through
 const MAX_RETRIES = 5;
 const RETRY_DELAY = 1000; // 1 second
 
@@ -238,34 +237,8 @@ class BlockchainService {
     }
   }
   
-  /**
-   * Get current network gas settings with a small incremental increase per attempt
-   * @param {number} attempt - retry attempt index (0-based)
-   */
-  /**
- * Get recommended gas settings dynamically
- */
-  async getGasSettings(attempt = 0) {
-    // Use exact minimum tip required by network
-    const minTipCap = ethers.BigNumber.from('25000000000'); // 25 Gwei in wei
-    const block = await this.provider.getBlock('latest');
-    const baseFee = block.baseFeePerGas || minTipCap;
-    
-    // Increase tip by 25 Gwei per attempt
-    const tipIncrease = ethers.utils.parseUnits(String(attempt * 25), 'gwei');
-    const maxPriorityFeePerGas = minTipCap.add(tipIncrease);
-    
-    // Set max fee to double base fee plus priority fee
-    const maxFeePerGas = baseFee.mul(2).add(maxPriorityFeePerGas);
-    
-    return {
-      type: 2, // EIP-1559
-      maxFeePerGas,
-      maxPriorityFeePerGas,
-      gasLimit: config.gasLimit,
-      nonce: await this.wallet.getTransactionCount()
-    };
-  }
+  // NOTE: gas settings are centralized in backend/src/utils/gasUtils.js
+  // The class does not implement getGasSettings to avoid duplication. Use the imported helpers.
 
   /**
    * Execute transaction with retries
@@ -280,9 +253,21 @@ class BlockchainService {
     const rpcUrls = config.rpcUrls;
 
     for (const rpcUrl of rpcUrls) {
+      // Reset attempt counter for each RPC endpoint
+      attempt = 0;
       // Update provider URL
       this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
       this.wallet = new ethers.Wallet(config.privateKey, this.provider);
+
+      // Quickly validate the RPC endpoint by attempting to detect network.
+      // If network can't be detected, skip this RPC without running attempts.
+      try {
+        await this.provider.getNetwork();
+      } catch (netErr) {
+        logger.warn(`Skipping RPC ${rpcUrl} - network detection failed: ${netErr.message}`);
+        // try next RPC
+        continue;
+      }
       
       // Reconnect contracts with the new provider and wallet
       this.inferenceMarket = new ethers.Contract(
@@ -299,13 +284,11 @@ class BlockchainService {
       // Try operation with current RPC
       while (attempt < maxAttempts) {
         try {
-          // Get fresh gas settings for each attempt
-          const priorityLevel = attempt; // Increase priority with each attempt
-          const gasParams = await getGasSettings(this.provider, priorityLevel);
-          
-          // Add current nonce to gas settings
+          // Get fresh gas settings for each attempt (utils.getGasSettings(provider, attempt))
+          const gasParams = await getGasSettings(this.provider, attempt);
+          // Ensure nonce and gasLimit are present
           const nonce = await this.wallet.getTransactionCount();
-          const params = { ...gasParams, nonce };
+          const params = { ...gasParams, nonce, gasLimit: gasParams.gasLimit || config.gasLimit };
           
           // Execute operation
           const result = await operation(params);
@@ -354,15 +337,8 @@ class BlockchainService {
   async pickupRequest(requestId) {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Picking up request #${requestId}...`);
-      
-      // Get current nonce and gas settings
-      const nonce = await this.wallet.getTransactionCount();
-      const gasParams = await getGasSettings(this.provider, 0);
-      
-      const tx = await this.inferenceMarket.pickupRequest(requestId, {
-        ...gasParams,
-        nonce
-      });
+      // Use gasSettings provided by executeWithRetry (includes nonce & gasLimit)
+      const tx = await this.inferenceMarket.pickupRequest(requestId, gasSettings);
       logger.logTransaction(tx.hash, `Pickup request #${requestId}`);
       
       const receipt = await tx.wait();
@@ -382,7 +358,8 @@ class BlockchainService {
       const resultHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(resultData));
       logger.info(`Result Hash: ${resultHash}`);
       
-      const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
+  // Use gasSettings provided by executeWithRetry
+  const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
       logger.logTransaction(tx.hash, `Submit result #${requestId}`);
       
       const receipt = await tx.wait();
@@ -421,19 +398,31 @@ class BlockchainService {
       try {
         // Get request details first
         const request = await this.inferenceMarket.getRequest(requestId);
+        const [status, details] = await Promise.all([
+          request,
+          this.inferenceMarket.getRequestStatus(requestId)
+        ]);
+
+        // Log current request state
+        logger.info(`Request #${requestId} current state:`, {
+          status: status.status,
+          statusText: details,
+          computeNode: status.computeNode
+        });
+        
+        // Only allow failure reporting if request is in COMPUTING state AND assigned to this node
         if (!request || request.status !== 1) { // 1 = COMPUTING
-          throw new Error('Invalid request state for failure reporting');
+          logger.warn(`Cannot report failure for request #${requestId} - Invalid state: ${details}`);
+          throw new Error(`Invalid request state for failure reporting: ${details}`);
         }
         
-        // Get current nonce and gas settings
-        const nonce = await this.wallet.getTransactionCount();
-        const gasParams = await getGasSettings(this.provider, 0);
+        if (request.computeNode.toLowerCase() !== this.wallet.address.toLowerCase()) {
+          logger.warn(`Cannot report failure for request #${requestId} - Not assigned to this node`);
+          throw new Error('Request not assigned to this compute node');
+        }
         
-        // Report failure which triggers refund
-        const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
-          ...gasParams,
-          nonce
-        });
+        // Use gasSettings provided by executeWithRetry
+        const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
         logger.logTransaction(tx.hash, `Report failure for request #${requestId}`);
         
         const receipt = await tx.wait();
@@ -456,21 +445,7 @@ class BlockchainService {
       } catch (error) {
         logger.error(`Failed to report failure for request #${requestId}:`, error);
         
-        // If transaction underpriced, try with higher gas
-        if (error.code === 'REPLACEMENT_UNDERPRICED') {
-          logger.info('Retrying with higher gas price...');
-          const gasParams = await getGasSettings(this.provider, 1); // Retry with higher gas
-          const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
-            ...gasParams,
-            nonce: await this.wallet.getTransactionCount()
-          });
-          const receipt = await tx.wait();
-          return {
-            success: true,
-            txHash: tx.hash,
-            receipt
-          };
-        }
+        // If transaction underpriced, executeWithRetry's replacement logic will handle retrying
         
         throw error;
       }
@@ -581,6 +556,14 @@ class BlockchainService {
       logger.error('Failed to get fee structure:', error);
       throw error;
     }
+  }
+
+  /**
+   * Wrapper to expose gas settings via the service for tests/consumers
+   * Delegates to utils.getGasSettings(provider, attempt)
+   */
+  async getGasSettings(attempt = 0) {
+    return await getGasSettings(this.provider, attempt);
   }
 
   /**
