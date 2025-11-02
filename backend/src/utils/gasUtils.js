@@ -2,8 +2,8 @@ import { ethers } from 'ethers';
 import logger from './logger.js';
 
 // Network-specific settings
-const MIN_TIP_CAP = ethers.utils.parseUnits('25', 'gwei'); // 25 Gwei base tip
-const MIN_GAS_PRICE = ethers.utils.parseUnits('40', 'gwei'); // 40 Gwei minimum
+const MIN_TIP_CAP = ethers.utils.parseUnits('30', 'gwei'); // 30 Gwei base tip (above network min of 25)
+const MIN_GAS_PRICE = ethers.utils.parseUnits('50', 'gwei'); // 50 Gwei minimum
 const MAX_GAS_PRICE = ethers.utils.parseUnits('500', 'gwei'); // 500 Gwei maximum
 const BASE_PRIORITY_INCREASE = 1.2; // 20% increase per attempt
 
@@ -27,6 +27,15 @@ export async function getGasSettings(provider, attempt = 0) {
     if (block.baseFeePerGas) {
       // Start with network's suggested priority fee or our minimum
       let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || MIN_TIP_CAP;
+      // Ensure priority fee is at least our minimum
+      try {
+        if (maxPriorityFeePerGas.lt(MIN_TIP_CAP)) {
+          maxPriorityFeePerGas = MIN_TIP_CAP;
+        }
+      } catch (e) {
+        // In case feeData returned a non-BigNumber, coerce
+        maxPriorityFeePerGas = MIN_TIP_CAP;
+      }
       
       // Increase priority fee based on attempt number
       if (attempt > 0) {
@@ -59,6 +68,12 @@ export async function getGasSettings(provider, attempt = 0) {
     
     // For legacy transactions
     let gasPrice = feeData.gasPrice || MIN_GAS_PRICE;
+    // Ensure gasPrice is at least our minimum
+    try {
+      if (gasPrice.lt(MIN_GAS_PRICE)) gasPrice = MIN_GAS_PRICE;
+    } catch (e) {
+      gasPrice = MIN_GAS_PRICE;
+    }
     
     // Increase gas price based on attempt number
     if (attempt > 0) {
@@ -103,22 +118,22 @@ export async function getReplacementGasSettings(provider, oldTx) {
   try {
     const block = await provider.getBlock('latest');
     
-    // Increase prices by at least 30% for replacement
-    const minIncrease = ethers.BigNumber.from('130').div('100');
-    
+    // Increase prices by at least 30% for replacement (use integer math)
+    const multiplierPercent = 130; // 130%
+
     if (oldTx.type === 2) {
-      // EIP-1559 transaction
-      const newPriorityFee = oldTx.maxPriorityFeePerGas.mul(minIncrease);
-      const newMaxFee = oldTx.maxFeePerGas.mul(minIncrease);
+        // EIP-1559 transaction
+        const newPriorityFee = oldTx.maxPriorityFeePerGas.mul(multiplierPercent).div(100);
+        const newMaxFee = oldTx.maxFeePerGas.mul(multiplierPercent).div(100);
       
-      // Cap the fees
-      const maxPriorityFeePerGas = ethers.BigNumber.from(
-        Math.min(newPriorityFee.toNumber(), MAX_GAS_PRICE.toNumber())
-      );
+        // Cap the fees
+        const maxPriorityFeePerGas = ethers.BigNumber.from(
+          Math.min(newPriorityFee.toNumber(), MAX_GAS_PRICE.toNumber())
+        );
       
-      const maxFeePerGas = ethers.BigNumber.from(
-        Math.min(newMaxFee.toNumber(), MAX_GAS_PRICE.toNumber())
-      );
+        const maxFeePerGas = ethers.BigNumber.from(
+          Math.min(newMaxFee.toNumber(), MAX_GAS_PRICE.toNumber())
+        );
       
       logger.debug('EIP-1559 Replacement Settings:', {
         oldPriorityFee: ethers.utils.formatUnits(oldTx.maxPriorityFeePerGas, 'gwei'),
@@ -135,11 +150,17 @@ export async function getReplacementGasSettings(provider, oldTx) {
       };
     }
     
-    // Legacy transaction
-    const newGasPrice = oldTx.gasPrice.mul(minIncrease);
-    const gasPrice = ethers.BigNumber.from(
+    // Legacy transaction: increase by multiplierPercent
+    const newGasPrice = oldTx.gasPrice.mul(multiplierPercent).div(100);
+    let gasPrice = ethers.BigNumber.from(
       Math.min(newGasPrice.toNumber(), MAX_GAS_PRICE.toNumber())
     );
+    // Ensure minimum
+    try {
+      if (gasPrice.lt(MIN_GAS_PRICE)) gasPrice = MIN_GAS_PRICE;
+    } catch (e) {
+      gasPrice = MIN_GAS_PRICE;
+    }
     
     logger.debug('Legacy Replacement Settings:', {
       oldGasPrice: ethers.utils.formatUnits(oldTx.gasPrice, 'gwei'),
