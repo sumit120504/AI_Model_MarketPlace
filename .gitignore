@@ -197,7 +197,7 @@ backend/models/*.onnx
 backend/models/*.pt
 backend/models/*.pth
 *.model
-
+backend/models/
 # Training data
 backend/data/train/
 backend/data/test/
@@ -311,3 +311,5 @@ playground/
 !docs/**/*.svg
 
 .venv
+
+backend/models/downloaded

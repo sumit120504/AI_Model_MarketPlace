@@ -3,16 +3,17 @@ import 'dotenv/config';
 const config = {
   // Blockchain
   rpcUrls: [
-    process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
+    'https://rpc-amoy.polygon.technology/',
+    'https://polygon-amoy.blockpi.network/v1/rpc/public',
     'https://polygon-amoy.drpc.org',
     'https://polygon-amoy-bor-rpc.publicnode.com',
-    'https://polygon-amoy-heimdall-rpc.publicnode.com',
+    process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
     // Add managed endpoints (Tenderly/Alchemy/QuickNode/Chainstack) for production
     // 'https://polygon-amoy.gateway.tenderly.co/<ACCESS_KEY>',
   ],
-  rpcUrl: process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
-  chainId: parseInt(process.env.CHAIN_ID) || 80001,
-  networkName: process.env.NETWORK_NAME || 'mumbai',
+  rpcUrl: 'https://rpc-amoy.polygon.technology/',  // Primary RPC
+  chainId: 80002,  // Amoy testnet chainId
+  networkName: 'amoy',
   
   // Contracts
   modelRegistryAddress: process.env.MODEL_REGISTRY_ADDRESS,
@@ -44,9 +45,17 @@ const config = {
   ipfsApiKey: process.env.PINATA_API_KEY,
   ipfsSecretKey: process.env.PINATA_SECRET_KEY,
   
-  // Gas
+  // Gas Settings
   gasLimit: parseInt(process.env.GAS_LIMIT) || 500000,
-  gasPrice: process.env.GAS_PRICE || '35'
+  minGasPrice: process.env.MIN_GAS_PRICE || '40', // 40 Gwei minimum
+  maxGasPrice: process.env.MAX_GAS_PRICE || '500', // 500 Gwei maximum
+  minTipCap: process.env.MIN_TIP_CAP || '25', // 25 Gwei minimum tip required by network
+  priorityIncrease: parseFloat(process.env.PRIORITY_INCREASE) || 1.3, // 30% increase per attempt
+  
+  // Transaction retry settings
+  maxRetries: parseInt(process.env.MAX_RETRIES) || 5,
+  baseRetryDelay: parseInt(process.env.BASE_RETRY_DELAY) || 1000, // 1 second base delay
+  maxRetryDelay: parseInt(process.env.MAX_RETRY_DELAY) || 10000 // 10 second max delay
 };
 
 // Validation

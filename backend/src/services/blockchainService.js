@@ -85,10 +85,33 @@ class BlockchainService {
     try {
       logger.info('Connecting to blockchain...');
       
-      // Create provider
-      this.provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+      // Try each RPC URL until one works
+      let provider = null;
+      let network = null;
       
-      // Create wallet
+      for (const rpcUrl of config.rpcUrls) {
+        try {
+          const tempProvider = new ethers.providers.JsonRpcProvider(rpcUrl);
+          network = await tempProvider.getNetwork();
+          
+          if (network.chainId === config.chainId) {
+            provider = tempProvider;
+            logger.info(`✅ Connected to RPC: ${rpcUrl}`);
+            break;
+          }
+        } catch (error) {
+          logger.warn(`Failed to connect to RPC ${rpcUrl}: ${error.message}`);
+          continue;
+        }
+      }
+      
+      if (!provider) {
+        throw new Error('Failed to connect to any RPC endpoint');
+      }
+      
+      this.provider = provider;
+      
+      // Create wallet with proper chain
       this.wallet = new ethers.Wallet(config.privateKey, this.provider);
       
       // Connect to contracts
@@ -104,12 +127,22 @@ class BlockchainService {
         this.wallet
       );
       
-      // Verify connection
-      const network = await this.provider.getNetwork();
+      // Verify chain and connection
       const balance = await this.wallet.getBalance();
-      const isAuthorized = await this.inferenceMarket.authorizedComputeNodes(this.wallet.address);
       
-      logger.info(`✅ Connected to ${network.name} (Chain ID: ${network.chainId})`);
+      // Check authorization with retries
+      let isAuthorized = false;
+      for (let i = 0; i < 3; i++) {
+        try {
+          isAuthorized = await this.inferenceMarket.authorizedComputeNodes(this.wallet.address);
+          break;
+        } catch (error) {
+          logger.warn(`Authorization check attempt ${i + 1} failed:`, error.message);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      logger.info(`✅ Connected to ${network.name || 'Amoy'} (Chain ID: ${network.chainId})`);
       logger.info(`Wallet: ${this.wallet.address}`);
       logger.info(`Balance: ${ethers.utils.formatEther(balance)} MATIC`);
       logger.info(`Authorized: ${isAuthorized ? 'YES ✅' : 'NO ❌'}`);
@@ -121,6 +154,13 @@ class BlockchainService {
       if (balance.lt(ethers.utils.parseEther('0.01'))) {
         logger.warn('⚠️  Low balance! Get more test MATIC from faucet.');
       }
+      
+      // Verify we can get current gas prices
+      const gasSettings = await this.getGasSettings(0);
+      logger.info('Initial gas settings:', {
+        maxPriorityFee: ethers.utils.formatUnits(gasSettings.maxPriorityFeePerGas, 'gwei') + ' Gwei',
+        maxFee: ethers.utils.formatUnits(gasSettings.maxFeePerGas, 'gwei') + ' Gwei'
+      });
       
       this.isConnected = true;
       return true;
@@ -243,109 +283,186 @@ class BlockchainService {
    * @param {number} attempt - retry attempt index (0-based)
    */
   /**
- * Get recommended gas settings dynamically
- */
+   * Get recommended gas settings dynamically
+   */
   async getGasSettings(attempt = 0) {
-    // Use exact minimum tip required by network
-    const minTipCap = ethers.BigNumber.from('25000000000'); // 25 Gwei in wei
+    const feeData = await this.provider.getFeeData();
     const block = await this.provider.getBlock('latest');
-    const baseFee = block.baseFeePerGas || minTipCap;
     
-    // Increase tip by 25 Gwei per attempt
-    const tipIncrease = ethers.utils.parseUnits(String(attempt * 25), 'gwei');
-    const maxPriorityFeePerGas = minTipCap.add(tipIncrease);
+    // Ensure we have the minimum required tip
+    const minTipCap = ethers.utils.parseUnits('25', 'gwei');
     
-    // Set max fee to double base fee plus priority fee
-    const maxFeePerGas = baseFee.mul(2).add(maxPriorityFeePerGas);
+    // Calculate priority fee with attempt-based increase
+    const baseTip = minTipCap;
+    const tipIncrease = attempt > 0 ? ethers.utils.parseUnits(String(attempt * 25), 'gwei') : ethers.utils.parseUnits('0');
+    const maxPriorityFeePerGas = baseTip.add(tipIncrease);
+    
+    // Set max fee to at least double the base fee plus priority fee
+    const maxFeePerGas = block.baseFeePerGas
+      ? block.baseFeePerGas.mul(2).add(maxPriorityFeePerGas)
+      : feeData.maxFeePerGas || ethers.utils.parseUnits('100', 'gwei');
+    
+    // Log gas settings for debugging
+    logger.info(`Gas Settings (attempt ${attempt}):`, {
+      maxPriorityFeePerGas: ethers.utils.formatUnits(maxPriorityFeePerGas, 'gwei') + ' Gwei',
+      maxFeePerGas: ethers.utils.formatUnits(maxFeePerGas, 'gwei') + ' Gwei',
+      baseFee: block.baseFeePerGas ? ethers.utils.formatUnits(block.baseFeePerGas, 'gwei') + ' Gwei' : 'N/A'
+    });
     
     return {
-      type: 2, // EIP-1559
+      type: 2, // Always use EIP-1559
       maxFeePerGas,
       maxPriorityFeePerGas,
-      gasLimit: config.gasLimit,
-      nonce: await this.wallet.getTransactionCount()
+      gasLimit: config.gasLimit
     };
-  }
-
-  /**
+  }  /**
    * Execute transaction with retries
    */
   async executeWithRetry(operation) {
     let lastError;
     let attempt = 0;
-    const maxAttempts = MAX_RETRIES;
-    const baseDelay = RETRY_DELAY;
-
+    const maxAttempts = config.maxRetries;
+    const baseDelay = config.baseRetryDelay;
+    const maxRetryDelay = config.maxRetryDelay;
+    
     // List of backup RPC URLs to try
     const rpcUrls = config.rpcUrls;
-
-    for (const rpcUrl of rpcUrls) {
-      // Update provider URL
-      this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
-      this.wallet = new ethers.Wallet(config.privateKey, this.provider);
+    let currentRpcIndex = 0;
+    
+    while (currentRpcIndex < rpcUrls.length) {
+      const rpcUrl = rpcUrls[currentRpcIndex];
       
-      // Reconnect contracts with the new provider and wallet
-      this.inferenceMarket = new ethers.Contract(
-        config.inferenceMarketAddress,
-        INFERENCE_MARKET_ABI,
-        this.wallet
-      );
-      this.modelRegistry = new ethers.Contract(
-        config.modelRegistryAddress,
-        MODEL_REGISTRY_ABI,
-        this.wallet
-      );
-
-      // Try operation with current RPC
-      while (attempt < maxAttempts) {
-        try {
-          // Get fresh gas settings for each attempt
-          const priorityLevel = attempt; // Increase priority with each attempt
-          const gasParams = await getGasSettings(this.provider, priorityLevel);
-          
-          // Add current nonce to gas settings
-          const nonce = await this.wallet.getTransactionCount();
-          const params = { ...gasParams, nonce };
-          
-          // Execute operation
-          const result = await operation(params);
-          return result;
-
-        } catch (error) {
-          lastError = error;
-          attempt++;
-          
-          if (attempt < maxAttempts) {
-            // Check for specific error conditions
-            if (error.code === 'REPLACEMENT_UNDERPRICED') {
-              logger.info('Transaction underpriced, retrying with higher gas...');
-              const replacementGas = await getReplacementGasSettings(this.provider, lastError.transaction);
-              try {
-                const result = await operation(replacementGas);
-                return result;
-              } catch (retryError) {
-                lastError = retryError;
-                continue;
+      try {
+        // Update provider URL
+        this.provider = new ethers.providers.JsonRpcProvider(rpcUrl);
+        await this.provider.getNetwork(); // Test connection
+        
+        // Reconnect wallet and contracts
+        this.wallet = new ethers.Wallet(config.privateKey, this.provider);
+        this.inferenceMarket = new ethers.Contract(
+          config.inferenceMarketAddress,
+          INFERENCE_MARKET_ABI,
+          this.wallet
+        );
+        this.modelRegistry = new ethers.Contract(
+          config.modelRegistryAddress,
+          MODEL_REGISTRY_ABI,
+          this.wallet
+        );
+        
+        // Reset attempt counter for new RPC
+        attempt = 0;
+        
+        while (attempt < maxAttempts) {
+          try {
+            // Get fresh gas settings with higher priority for each attempt
+            const gasParams = await getGasSettings(this.provider, attempt);
+            
+            // Add nonce and gas limit
+            const params = {
+              ...gasParams,
+              gasLimit: config.gasLimit,
+              nonce: await this.wallet.getTransactionCount()
+            };
+            
+            // Execute operation
+            const result = await operation(params);
+            return result;
+            
+          } catch (error) {
+            lastError = error;
+            
+            // Check if we should retry based on error type
+            const shouldRetry = this.shouldRetryError(error);
+            if (!shouldRetry) {
+              throw error; // Don't retry on non-retryable errors
+            }
+            
+            attempt++;
+            
+            // Handle gas-specific errors
+            if (this.isGasError(error)) {
+              logger.info('Transaction gas price too low, retrying with higher gas...');
+              
+              if (error.transaction) {
+                try {
+                  const replacementGas = await getReplacementGasSettings(this.provider, error.transaction);
+                  const result = await operation(replacementGas);
+                  return result;
+                } catch (retryError) {
+                  lastError = retryError;
+                  logger.warn('Replacement transaction failed:', retryError.message);
+                }
               }
             }
             
-            // Exponential backoff with max delay of 10 seconds
-            const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), 10000);
-            logger.info(`Retrying operation in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
+            if (attempt < maxAttempts) {
+              // Exponential backoff with max delay
+              const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxRetryDelay);
+              logger.info(`Retrying operation in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})...`);
+              await new Promise(resolve => setTimeout(resolve, delay));
+              continue;
+            }
+            
+            throw error; // Max attempts reached for this RPC
           }
-
-          // If all retries on current RPC failed, log and continue to next RPC
-          logger.warn(`All attempts with ${rpcUrl} failed, trying next RPC if available...`);
-          break;
         }
+      } catch (error) {
+        lastError = error;
+        logger.warn(`Failed on RPC ${rpcUrl}:`, error.message);
+        
+        // Try next RPC
+        currentRpcIndex++;
+        if (currentRpcIndex < rpcUrls.length) {
+          logger.info(`Switching to next RPC: ${rpcUrls[currentRpcIndex]}`);
+          continue;
+        }
+        
+        // All RPCs exhausted
+        logger.error(`All RPCs failed after ${attempt} total attempts`);
+        throw lastError;
       }
     }
-
-    // If we get here, all retries on all RPCs failed
-    logger.error(`All retry attempts failed after ${maxAttempts} tries on ${rpcUrls.length} RPCs`);
-    throw lastError;
+  }
+  
+  shouldRetryError(error) {
+    // Network/connection errors
+    if (error.code === 'NETWORK_ERROR' || error.code === 'TIMEOUT' || 
+        error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
+      return true;
+    }
+    
+    // Nonce too low - might need fresh nonce
+    if (error.code === 'NONCE_EXPIRED' || error.code === 'REPLACEMENT_UNDERPRICED' ||
+        (error.error?.message || '').includes('nonce too low')) {
+      return true;
+    }
+    
+    // Gas price errors
+    if (this.isGasError(error)) {
+      return true;
+    }
+    
+    // RPC node errors
+    if (error.code === 'SERVER_ERROR' || error.code === 'INTERNAL_ERROR' ||
+        error.error?.code === -32000 || error.error?.code === -32603) {
+      return true;
+    }
+    
+    return false;
+  }
+  
+  isGasError(error) {
+    if (!error) return false;
+    
+    // Check various gas-related error patterns
+    return error.code === 'REPLACEMENT_UNDERPRICED' ||
+           error.code === 'UNPREDICTABLE_GAS_LIMIT' ||
+           (error.error?.code === -32000 && (
+             error.error.message.includes('gas price') ||
+             error.error.message.includes('maxFeePerGas') ||
+             error.error.message.includes('maxPriorityFeePerGas')
+           ));
   }
 
   /**
@@ -355,20 +472,50 @@ class BlockchainService {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Picking up request #${requestId}...`);
       
-      // Get current nonce and gas settings
-      const nonce = await this.wallet.getTransactionCount();
-      const gasParams = await getGasSettings(this.provider, 0);
+      // Check request state first
+      const request = await this.inferenceMarket.getRequest(requestId);
+      if (!request) {
+        throw new Error('Request not found');
+      }
       
-      const tx = await this.inferenceMarket.pickupRequest(requestId, {
-        ...gasParams,
-        nonce
-      });
-      logger.logTransaction(tx.hash, `Pickup request #${requestId}`);
+      // Double check request is in PENDING state
+      const status = await this.inferenceMarket.getRequestStatus(requestId);
+      if (status !== 'PENDING') {
+        throw new Error(`Request is in ${status} state, expected PENDING`);
+      }
       
-      const receipt = await tx.wait();
-      logger.info(`✅ Request #${requestId} picked up (Block: ${receipt.blockNumber})`);
+      // Check for timeout
+      const now = Math.floor(Date.now() / 1000);
+      if (now > request.createdAt.toNumber() + 300) { // 5 minutes timeout
+        throw new Error('Request has timed out');
+      }
       
-      return { success: true, txHash: tx.hash, receipt };
+      // Send transaction with optimized gas settings
+      const tx = await this.inferenceMarket.pickupRequest(requestId, gasSettings);
+      
+      logger.info(`Pickup transaction sent: ${tx.hash}`);
+      
+      // Wait for receipt with timeout
+      const receipt = await Promise.race([
+        tx.wait(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000)
+        )
+      ]);
+      
+      // Verify the event was emitted
+      const event = receipt.events?.find(e => e.event === 'InferenceComputing');
+      if (!event) {
+        throw new Error('InferenceComputing event not found in receipt');
+      }
+      
+      logger.info(`✅ Request #${requestId} picked up successfully`);
+      return { 
+        success: true, 
+        txHash: tx.hash, 
+        receipt,
+        block: receipt.blockNumber
+      };
     });
   }
 
@@ -418,62 +565,77 @@ class BlockchainService {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Reporting failure for request #${requestId}...`);
       
-      try {
-        // Get request details first
-        const request = await this.inferenceMarket.getRequest(requestId);
-        if (!request || request.status !== 1) { // 1 = COMPUTING
-          throw new Error('Invalid request state for failure reporting');
-        }
-        
-        // Get current nonce and gas settings
-        const nonce = await this.wallet.getTransactionCount();
-        const gasParams = await getGasSettings(this.provider, 0);
-        
-        // Report failure which triggers refund
-        const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
-          ...gasParams,
-          nonce
-        });
-        logger.logTransaction(tx.hash, `Report failure for request #${requestId}`);
-        
-        const receipt = await tx.wait();
-        
-        // Verify refund event
-        const refundEvent = receipt.events?.find(e => e.event === 'UserRefunded');
-        const failureEvent = receipt.events?.find(e => e.event === 'InferenceFailed');
-        
-        if (refundEvent && failureEvent) {
-          logger.info(`✅ Failure reported and refund processed for request #${requestId}`);
-          return { 
-            success: true, 
-            txHash: tx.hash, 
-            receipt,
-            refundAmount: ethers.utils.formatEther(refundEvent.args.amount)
-          };
-        } else {
-          throw new Error('Required events not found in transaction receipt');
-        }
-      } catch (error) {
-        logger.error(`Failed to report failure for request #${requestId}:`, error);
-        
-        // If transaction underpriced, try with higher gas
-        if (error.code === 'REPLACEMENT_UNDERPRICED') {
-          logger.info('Retrying with higher gas price...');
-          const gasParams = await getGasSettings(this.provider, 1); // Retry with higher gas
-          const tx = await this.inferenceMarket.reportFailure(requestId, reason, {
-            ...gasParams,
-            nonce: await this.wallet.getTransactionCount()
-          });
-          const receipt = await tx.wait();
-          return {
-            success: true,
-            txHash: tx.hash,
-            receipt
-          };
-        }
-        
-        throw error;
+      // Validate request state first
+      const request = await this.inferenceMarket.getRequest(requestId);
+      if (!request) {
+        throw new Error('Request not found');
       }
+      
+      // Check request status with retry for eventual consistency
+      for (let i = 0; i < 3; i++) {
+        const status = await this.inferenceMarket.getRequestStatus(requestId);
+        logger.debug(`Request #${requestId} status: ${status}`);
+        
+        if (status === 'COMPUTING') {
+          break;
+        } else if (i === 2) {
+          throw new Error(`Invalid request state for failure reporting: ${status}`);
+        }
+        
+        // Wait briefly for state to update
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      // Report failure which triggers refund
+      const tx = await this.inferenceMarket.reportFailure(requestId, reason.substring(0, 100), gasSettings);
+      logger.info(`Failure report transaction sent: ${tx.hash}`);
+      
+      // Wait for receipt with timeout
+      const receipt = await Promise.race([
+        tx.wait(),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Transaction confirmation timeout')), 60000)
+        )
+      ]);
+      
+      // Verify events
+      const failureEvent = receipt.events?.find(e => e.event === 'InferenceFailed');
+      const refundEvent = receipt.events?.find(e => e.event === 'UserRefunded');
+      
+      if (!failureEvent) {
+        throw new Error('InferenceFailed event not found in receipt');
+      }
+      
+      const result = {
+        success: true,
+        txHash: tx.hash,
+        receipt,
+        failureReason: reason,
+        refundProcessed: false
+      };
+      
+      if (refundEvent) {
+        result.refundProcessed = true;
+        result.refundAmount = ethers.utils.formatEther(refundEvent.args.amount);
+        logger.info(`✅ Failure reported and refund processed for request #${requestId}:`, {
+          refundAmount: result.refundAmount,
+          user: refundEvent.args.user
+        });
+      } else {
+        logger.warn(`⚠️ Failure reported but no refund event found for request #${requestId}`);
+      }
+      
+      return result;
+    }).catch(error => {
+      // Log error details for debugging
+      logger.error(`Failed to report failure for request #${requestId}:`, {
+        error: error.message,
+        code: error.code,
+        data: error.error?.message || error.data?.message,
+        transaction: error.transaction?.hash
+      });
+      
+      throw error;
     });
   }
 

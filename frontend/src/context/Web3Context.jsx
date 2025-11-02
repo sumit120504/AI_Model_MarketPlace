@@ -40,7 +40,7 @@ export function Web3Provider({ children }) {
   // Connect wallet
   async function connectWallet() {
     if (typeof window.ethereum === 'undefined') {
-      toast.error('Please install MetaMask!');
+      toast.error('Please install Wallet Extension!');
       return;
     }
 
