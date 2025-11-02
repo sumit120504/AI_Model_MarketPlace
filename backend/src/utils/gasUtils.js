@@ -1,11 +1,11 @@
 import { ethers } from 'ethers';
 import logger from './logger.js';
 
-// ✅ Polygon Amoy Network Gas Configuration
-const MIN_TIP_CAP = ethers.utils.parseUnits('30', 'gwei');     // min priority fee
-const MIN_GAS_PRICE = ethers.utils.parseUnits('35', 'gwei');   // baseline price
-const MAX_GAS_PRICE = ethers.utils.parseUnits('300', 'gwei');  // cap upper bound
-const BASE_PRIORITY_INCREASE = 1.2; // 20% increase per retry
+// Network-specific settings
+const MIN_TIP_CAP = ethers.utils.parseUnits('25', 'gwei'); // 25 Gwei base tip
+const MIN_GAS_PRICE = ethers.utils.parseUnits('40', 'gwei'); // 40 Gwei minimum
+const MAX_GAS_PRICE = ethers.utils.parseUnits('500', 'gwei'); // 500 Gwei maximum
+const BASE_PRIORITY_INCREASE = 1.2; // 20% increase per attempt
 
 /**
  * Get gas settings compatible with Polygon Amoy
@@ -22,7 +22,8 @@ export async function getGasSettings(provider, attempt = 0) {
     // Polygon supports EIP-1559
     if (block.baseFeePerGas) {
       let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || MIN_TIP_CAP;
-
+      
+      // Increase priority fee based on attempt number
       if (attempt > 0) {
         maxPriorityFeePerGas = maxPriorityFeePerGas
           .mul(Math.floor(priorityMultiplier * 100))
@@ -53,6 +54,8 @@ export async function getGasSettings(provider, attempt = 0) {
 
     // Fallback for legacy
     let gasPrice = feeData.gasPrice || MIN_GAS_PRICE;
+    
+    // Increase gas price based on attempt number
     if (attempt > 0) {
       gasPrice = gasPrice.mul(Math.floor(priorityMultiplier * 100)).div(100);
     }
@@ -84,22 +87,27 @@ export async function getReplacementGasSettings(provider, oldTx) {
   try {
     const increase = ethers.BigNumber.from(120); // 20% bump
     const block = await provider.getBlock('latest');
-
+    
+    // Increase prices by at least 30% for replacement
+    const minIncrease = ethers.BigNumber.from('130').div('100');
+    
     if (oldTx.type === 2) {
-      const newPriority = oldTx.maxPriorityFeePerGas.mul(increase).div(100);
-      const newMaxFee = oldTx.maxFeePerGas.mul(increase).div(100);
-
-      const maxPriorityFeePerGas = newPriority.gt(MAX_GAS_PRICE)
-        ? MAX_GAS_PRICE
-        : newPriority;
-
-      const maxFeePerGas = newMaxFee.gt(MAX_GAS_PRICE)
-        ? MAX_GAS_PRICE
-        : newMaxFee;
-
-      logger.debug('Polygon EIP-1559 Replacement:', {
-        oldPriority: ethers.utils.formatUnits(oldTx.maxPriorityFeePerGas, 'gwei'),
-        newPriority: ethers.utils.formatUnits(maxPriorityFeePerGas, 'gwei'),
+      // EIP-1559 transaction
+      const newPriorityFee = oldTx.maxPriorityFeePerGas.mul(minIncrease);
+      const newMaxFee = oldTx.maxFeePerGas.mul(minIncrease);
+      
+      // Cap the fees
+      const maxPriorityFeePerGas = ethers.BigNumber.from(
+        Math.min(newPriorityFee.toNumber(), MAX_GAS_PRICE.toNumber())
+      );
+      
+      const maxFeePerGas = ethers.BigNumber.from(
+        Math.min(newMaxFee.toNumber(), MAX_GAS_PRICE.toNumber())
+      );
+      
+      logger.debug('EIP-1559 Replacement Settings:', {
+        oldPriorityFee: ethers.utils.formatUnits(oldTx.maxPriorityFeePerGas, 'gwei'),
+        newPriorityFee: ethers.utils.formatUnits(maxPriorityFeePerGas, 'gwei'),
         oldMaxFee: ethers.utils.formatUnits(oldTx.maxFeePerGas, 'gwei'),
         newMaxFee: ethers.utils.formatUnits(maxFeePerGas, 'gwei'),
       });
@@ -111,16 +119,16 @@ export async function getReplacementGasSettings(provider, oldTx) {
         nonce: oldTx.nonce,
       };
     }
-
-    // Legacy type
-    const newGasPrice = oldTx.gasPrice.mul(increase).div(100);
-    const gasPrice = newGasPrice.gt(MAX_GAS_PRICE)
-      ? MAX_GAS_PRICE
-      : newGasPrice;
-
-    logger.debug('Polygon Legacy Replacement:', {
-      oldGas: ethers.utils.formatUnits(oldTx.gasPrice, 'gwei'),
-      newGas: ethers.utils.formatUnits(gasPrice, 'gwei'),
+    
+    // Legacy transaction
+    const newGasPrice = oldTx.gasPrice.mul(minIncrease);
+    const gasPrice = ethers.BigNumber.from(
+      Math.min(newGasPrice.toNumber(), MAX_GAS_PRICE.toNumber())
+    );
+    
+    logger.debug('Legacy Replacement Settings:', {
+      oldGasPrice: ethers.utils.formatUnits(oldTx.gasPrice, 'gwei'),
+      newGasPrice: ethers.utils.formatUnits(gasPrice, 'gwei')
     });
 
     return { type: 0, gasPrice, nonce: oldTx.nonce };

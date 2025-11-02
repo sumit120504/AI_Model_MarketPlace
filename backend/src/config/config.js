@@ -7,7 +7,7 @@ const config = {
     'https://polygon-amoy.blockpi.network/v1/rpc/public',
     'https://polygon-amoy.drpc.org',
     'https://polygon-amoy-bor-rpc.publicnode.com',
-    process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
+    'https://polygon-amoy-heimdall-rpc.publicnode.com',
     // Add managed endpoints (Tenderly/Alchemy/QuickNode/Chainstack) for production
     // 'https://polygon-amoy.gateway.tenderly.co/<ACCESS_KEY>',
   ],
