@@ -2,10 +2,10 @@ import { ethers } from 'ethers';
 import logger from './logger.js';
 
 // Network-specific settings
-const MIN_TIP_CAP = ethers.utils.parseUnits('30', 'gwei'); // 30 Gwei base tip (above network min of 25)
-const MIN_GAS_PRICE = ethers.utils.parseUnits('50', 'gwei'); // 50 Gwei minimum
-const MAX_GAS_PRICE = ethers.utils.parseUnits('500', 'gwei'); // 500 Gwei maximum
-const BASE_PRIORITY_INCREASE = 1.2; // 20% increase per attempt
+const MIN_TIP_CAP = ethers.utils.parseUnits('50', 'gwei'); // 50 Gwei base tip for more aggressive pricing
+const MIN_GAS_PRICE = ethers.utils.parseUnits('75', 'gwei'); // 75 Gwei minimum
+const MAX_GAS_PRICE = ethers.utils.parseUnits('1000', 'gwei'); // 1000 Gwei maximum to ensure tx goes through
+const BASE_PRIORITY_INCREASE = 1.5; // 50% increase per attempt for faster inclusion
 
 /**
  * Get network-appropriate gas settings for a transaction

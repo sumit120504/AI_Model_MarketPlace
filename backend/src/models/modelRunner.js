@@ -3,6 +3,7 @@ import logger from '../utils/logger.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
+import { getSpamModelRunner } from './spamModelRunner.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -146,6 +147,18 @@ class ModelRunner {
     this.modelInfo = modelInfo;
     logger.info(`Model path set to: ${modelPath}`);
     
+    // Check if this is a spam detection model
+    const isSpamModel = modelInfo?.type === 'text_classification' || 
+                       modelPath.includes('spam_detector') ||
+                       modelInfo?.name?.toLowerCase().includes('spam');
+    
+    if (isSpamModel) {
+      logger.info('Using specialized spam detection model runner');
+      this.spamRunner = getSpamModelRunner();
+      await this.spamRunner.setModelPath(modelPath);
+      return;
+    }
+    
     // Verify model file exists
     try {
       await fs.access(modelPath);
@@ -166,6 +179,12 @@ class ModelRunner {
     
     if (!this.modelPath) {
       throw new Error('Model path not set. Call setModelPath() with downloaded model path first.');
+    }
+    
+    // If we have a spam model runner, use it
+    if (this.spamRunner) {
+      logger.info('Using specialized spam detection runner');
+      return await this.spamRunner.runInference(inputData);
     }
     
     try {
@@ -208,26 +227,31 @@ class ModelRunner {
       // Create Python shell with error handling
       const pyshell = new PythonShell('run_model.py', options);
       let modelOutput = [];
-      let errorOutput = [];          pyshell.on('message', (message) => {
-            try {
-              // Try to parse as JSON first (it could be the final result)
-              const parsed = JSON.parse(message);
-              if (parsed.success !== undefined) {
-                // This is our final result object
-                resolve(parsed);
-              } else {
-                // It's a progress/debug message
-                modelOutput.push(message);
-                logger.debug('Model output:', message);
-              }
-            } catch {
-              // Not JSON, treat as debug output
-              modelOutput.push(message);
-              logger.debug('Model debug:', message);
-            }
-          });
+      let errorOutput = [];
+      let finalResult = null;
 
-          pyshell.on('stderr', (err) => {
+          pyshell.on('message', (message) => {
+        try {
+          // Try to parse as JSON first
+          logger.debug('Raw message from Python:', message);
+          const parsed = JSON.parse(message);
+          logger.debug('Parsed JSON:', parsed);
+          
+          if (parsed.success !== undefined) {
+            // Store the final result and log it
+            finalResult = parsed;
+            logger.debug('Got final result:', finalResult);
+          } else {
+            // It's a progress/debug message
+            modelOutput.push(message);
+            logger.debug('Model output:', message);
+          }
+        } catch (parseError) {
+          // Not JSON, treat as debug output
+          modelOutput.push(message);
+          logger.debug('Model debug message:', message);
+        }
+      });          pyshell.on('stderr', (err) => {
             errorOutput.push(err);
             logger.error('Model stderr:', err);
           });
@@ -238,8 +262,12 @@ class ModelRunner {
           });
 
           pyshell.on('close', () => {
-            if (modelOutput.length === 0) {
+            if (finalResult) {
+              resolve(finalResult);
+            } else if (modelOutput.length === 0 && errorOutput.length === 0) {
               reject(new Error('No output received from model'));
+            } else if (errorOutput.length > 0) {
+              reject(new Error(`Model error: ${errorOutput.join('\n')}`));
             }
           });
 
@@ -254,6 +282,8 @@ class ModelRunner {
             if (err) {
               logger.error('Python script error:', err);
               reject(new Error(`Model execution failed: ${err.message}\nDebug output: ${modelOutput.join('\n')}\nError output: ${errorOutput.join('\n')}`));
+            } else if (finalResult) {
+              resolve(finalResult);
             }
           });
         });
@@ -280,6 +310,9 @@ class ModelRunner {
         throw new Error(errorMessage);
       }
 
+      // Log raw results for debugging
+      logger.debug('Raw results from Python:', results);
+      
       // Normalize results to standard schema
       let processedResults = {
         success: true,
@@ -288,28 +321,35 @@ class ModelRunner {
         metadata: results.metadata || {}
       };
 
+      // Handle result from our spam detector model
       if (results.output) {
-        // Case 1: Standard format with label and confidence
-        if (results.output.label !== undefined && results.output.confidence !== undefined) {
-          processedResults.result = results.output.label;
-          processedResults.confidence = results.output.confidence;
+        logger.debug('Processing model output:', results.output);
+        
+        // Direct format from our spam detector
+        const output = results.output;
+        if (output.label && output.confidence && output.probabilities) {
+          logger.debug('Found standard spam detector output format');
+          processedResults.result = output.label;
+          processedResults.confidence = output.confidence;
+          processedResults.metadata.probabilities = output.probabilities;
+          logger.debug('Processed output:', processedResults);
+          return processedResults;
         }
-        // Case 2: Prediction index with probabilities array
-        else if (results.output.prediction !== undefined && Array.isArray(results.output.probabilities)) {
-          const labels = ['NOT_SPAM', 'SPAM']; // Default labels if not provided in config
-          processedResults.result = labels[results.output.prediction];
-          processedResults.confidence = results.output.probabilities[results.output.prediction];
-        }
-        // Case 3: Direct prediction with probabilities object
-        else if (results.output.prediction !== undefined && results.output.probabilities && typeof results.output.probabilities === 'object') {
-          const prediction = Boolean(results.output.prediction);
-          processedResults.result = prediction ? 'SPAM' : 'NOT_SPAM';
-          processedResults.confidence = results.output.probabilities[prediction ? 1 : 0];
-        }
-        // Case 4: Direct string result
-        else if (typeof results.output === 'string') {
-          processedResults.result = results.output;
-          processedResults.confidence = 1.0; // Default confidence for direct output
+        
+        logger.debug('Standard format not found, checking alternatives...');
+        
+        // Alternative formats
+        if (typeof output === 'object') {
+          if ('prediction' in output) {
+            processedResults.result = output.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            processedResults.confidence = output.probabilities?.[output.prediction] || 1.0;
+          } else if (output.label) {
+            processedResults.result = output.label;
+            processedResults.confidence = output.confidence || 1.0;
+          }
+        } else if (typeof output === 'string') {
+          processedResults.result = output;
+          processedResults.confidence = 1.0;
         }
       }
 
@@ -318,9 +358,17 @@ class ModelRunner {
         processedResults.confidence = Math.max(0, Math.min(1, processedResults.confidence));
       }
 
-      // Ensure we have a valid result
+      logger.debug('Final processed results before validation:', processedResults);
+
+      // Ensure we have both a valid result and confidence
       if (processedResults.result === null) {
+        logger.error('No valid result found in model output:', results);
         throw new Error('Failed to extract valid prediction from model output');
+      }
+      
+      if (processedResults.confidence === null) {
+        logger.error('No confidence score found in model output:', results);
+        throw new Error('Failed to extract confidence score from model output');
       }
 
       // Log success with normalized output

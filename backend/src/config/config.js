@@ -3,15 +3,17 @@ import 'dotenv/config';
 const config = {
   // Blockchain
   rpcUrls: [
-    process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
+    process.env.RPC_URL,
+    'https://rpc-amoy.polygon.technology/',
     'https://polygon-amoy.drpc.org',
     'https://polygon-amoy-bor-rpc.publicnode.com',
-    // Add managed endpoints (Tenderly/Alchemy/QuickNode/Chainstack) for production
-    // 'https://polygon-amoy.gateway.tenderly.co/<ACCESS_KEY>',
-  ],
-  rpcUrl: process.env.RPC_URL || 'https://rpc-amoy.polygon.technology/',
-  chainId: parseInt(process.env.CHAIN_ID) || 80001,
-  networkName: process.env.NETWORK_NAME || 'mumbai',
+    'https://polygon-amoy.blockpi.network/v1/rpc/public',
+    'https://polygon-amoy.gateway.tenderly.co',
+    'https://gateway.tenderly.co/public/polygon-amoy'
+  ].filter(Boolean),
+  rpcUrl: process.env.RPC_URL || 'https://polygon-amoy.blockpi.network/v1/rpc/public',
+  chainId: parseInt(process.env.CHAIN_ID) || 80002,
+  networkName: process.env.NETWORK_NAME || 'amoy',
   
   // Contracts
   modelRegistryAddress: process.env.MODEL_REGISTRY_ADDRESS,
@@ -44,8 +46,8 @@ const config = {
   ipfsSecretKey: process.env.PINATA_SECRET_KEY,
   
   // Gas
-  gasLimit: parseInt(process.env.GAS_LIMIT) || 500000,
-  gasPrice: process.env.GAS_PRICE || '35'
+  gasLimit: parseInt(process.env.GAS_LIMIT) || 1000000, // Increased default gas limit to 1M
+  gasPrice: process.env.GAS_PRICE || '75' // Increased default gas price
 };
 
 // Validation

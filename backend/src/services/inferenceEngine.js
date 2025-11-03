@@ -276,16 +276,34 @@ class InferenceEngine {
         updateStatus('inference', 'started');
         logger.info(`[Request #${requestId}] Starting inference with input length: ${inputText.length} chars`);
         
+        // Validate input before inference
+        if (!inputText || typeof inputText !== 'string') {
+          throw new Error(`Invalid input data type: ${typeof inputText}`);
+        }
+
+        logger.info(`Running inference with input: "${inputText.substring(0, 50)}${inputText.length > 50 ? '...' : ''}"`);
+        
         const result = await this.modelRunner.runInference(inputText);
         
-        if (!result || !result.success) {
+        if (!result) {
           updateStatus('inference', 'failed');
-          throw new Error(result?.error || 'Inference failed with no result');
+          throw new Error('Model returned no result');
+        }
+        
+        if (!result.success) {
+          updateStatus('inference', 'failed');
+          throw new Error(`Inference failed: ${result.error || 'Unknown error'}`);
+        }
+        
+        if (result.result === undefined || result.result === null) {
+          updateStatus('inference', 'failed');
+          throw new Error('Model returned success but no result data');
         }
         
         logger.info(`[Request #${requestId}] Inference successful:`, { 
           result: result.result,
-          confidence: result.confidence
+          confidence: result.confidence,
+          metadata: result.metadata || {}
         });
         
         updateStatus('inference', 'completed');
@@ -294,7 +312,24 @@ class InferenceEngine {
         updateStatus('submission', 'started');
         logger.info(`[Request #${requestId}] Submitting result to blockchain...`);
         
-        const submitResponse = await this.blockchain.submitResult(requestId, result.result);
+        // Prepare result data
+        const resultData = JSON.stringify({
+          result: result.result,
+          confidence: result.confidence,
+          metadata: result.metadata || {},
+          timestamp: Date.now()
+        });
+        
+        logger.info(`[Request #${requestId}] Submitting result:`, { 
+          result: result.result,
+          confidence: result.confidence
+        });
+        
+        const submitResponse = await this.blockchain.submitResult(requestId, resultData);
+        
+        if (!submitResponse || !submitResponse.success) {
+          throw new Error('Failed to submit result to blockchain');
+        }
         
         if (submitResponse.paymentProcessed) {
           logger.info(`[Request #${requestId}] Result submitted and payment processed`);
@@ -418,33 +453,53 @@ class InferenceEngine {
   }
   
   async getInputData(inputDataHash) {
-    const cached = this.cache.get(inputDataHash);
+    // First try cache with raw hash
+    let cached = this.cache.get(inputDataHash);
     if (cached) {
       logger.info('Using cached input data');
       return cached;
     }
     
-    let inputData;
+    // Check if we have cached CID mapping
+    const cidCacheKey = `cid_${inputDataHash}`;
+    const cachedCid = this.cache.get(cidCacheKey);
+    if (cachedCid) {
+      logger.info(`Found cached CID mapping for ${inputDataHash}: ${cachedCid}`);
+      // Try to get content from IPFS using cached CID
+      try {
+        const content = await this.ipfsService.getFileContent(cachedCid);
+        if (content) {
+          // Cache the content under both keys
+          this.cache.set(inputDataHash, content);
+          logger.info('Successfully retrieved content from IPFS using cached CID');
+          return content;
+        }
+      } catch (err) {
+        logger.warn(`Failed to get content from cached CID: ${err.message}`);
+      }
+    }
     
+    let inputData;
     try {
-      // Try to fetch from IPFS
-      logger.info(`Fetching input data from IPFS: ${inputDataHash}`);
+      // If no cached CID, try fetching content directly
+      logger.info(`Fetching input data using hash: ${inputDataHash}`);
       
       // Create temp file for input data
       const tempInputPath = path.join(process.cwd(), 'models', 'temp', `input_${inputDataHash}.json`);
       await fs.promises.mkdir(path.dirname(tempInputPath), { recursive: true });
       
-      // Download input data file
-      await this.ipfsService.downloadFile(inputDataHash, tempInputPath);
-      
-      // Read the downloaded file
-      inputData = await fs.promises.readFile(tempInputPath, 'utf8');
-      
-      // Cleanup temp file
-      try {
-        await fs.promises.unlink(tempInputPath);
-      } catch (cleanupError) {
-        logger.warn(`Failed to cleanup temp input file: ${cleanupError.message}`);
+      // Try to get content
+      const content = await this.ipfsService.getFileContent(inputDataHash);
+      if (content) {
+        // Save content and cache it
+        await fs.promises.writeFile(tempInputPath, content);
+        inputData = content;
+        
+        // Cache under both keys
+        this.cache.set(inputDataHash, content);
+        this.cache.set(cidCacheKey, inputDataHash); // Cache the reverse mapping too
+      } else {
+        throw new Error('Failed to get content from IPFS');
       }
       
       if (!inputData) {

@@ -358,8 +358,21 @@ class BlockchainService {
       const resultHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(resultData));
       logger.info(`Result Hash: ${resultHash}`);
       
-  // Use gasSettings provided by executeWithRetry
-  const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
+      // Estimate gas specifically for this call
+      try {
+        const gasEstimate = await this.inferenceMarket.estimateGas.submitResult(requestId, resultHash, resultData);
+        // Add 50% buffer to the estimate
+        const gasLimit = gasEstimate.mul(150).div(100);
+        logger.info(`Estimated gas: ${gasEstimate.toString()}, Using gas limit: ${gasLimit.toString()}`);
+        gasSettings.gasLimit = gasLimit;
+      } catch (gasEstimateError) {
+        logger.warn(`Failed to estimate gas, using default: ${gasEstimateError.message}`);
+        // If estimation fails, use a higher default
+        gasSettings.gasLimit = 1000000; // 1M gas units
+      }
+      
+      // Use updated gasSettings
+      const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
       logger.logTransaction(tx.hash, `Submit result #${requestId}`);
       
       const receipt = await tx.wait();

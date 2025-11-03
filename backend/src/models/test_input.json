@@ -1,0 +1,5 @@
+{
+    "input": "Hi John, let's meet for coffee tomorrow at 3pm.",
+    "modelType": "text_classification",
+    "modelConfig": {}
+}
