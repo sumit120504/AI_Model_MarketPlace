@@ -122,7 +122,23 @@ function ModelDetails() {
           throw new Error(`Failed to fetch request status: ${errorText}`);
         }
         const request = await resp.json();
-        if (!request) throw new Error('Invalid response format');        // Update status and progress
+        if (!request) throw new Error('Invalid response format');
+
+        // Debug: log the raw request shape so we can see how resultData is returned
+        console.debug('Polled request:', request);
+
+        // If resultData was serialized as a JSON string somewhere upstream,
+        // parse it so our extraction logic can work with an object.
+        if (request.resultData && typeof request.resultData === 'string') {
+          try {
+            request.resultData = JSON.parse(request.resultData);
+            console.debug('Parsed stringified resultData into object:', request.resultData);
+          } catch (e) {
+            console.warn('Failed to parse request.resultData JSON string:', e);
+          }
+        }
+
+        // Update status and progress
         setRequestStatus(request.statusText || 'PENDING');
         if (request.progress) {
           setProgressInfo(request.progress);
@@ -151,10 +167,57 @@ function ModelDetails() {
           setProcessing(false);
 
           const resultData = request.resultData || {};
+
+          // Robust result extraction: handle multiple possible shapes that
+          // the backend or compute node might return. Prefer explicit
+          // `result` and `confidence`, then `output.label`/`output.confidence`,
+          // then numeric `prediction`, then fall back to highest-probability
+          // label found in metadata.probabilities.
+          const extractFromProbabilities = (probs) => {
+            try {
+              const entries = Object.entries(probs || {});
+              if (entries.length === 0) return null;
+              entries.sort((a, b) => b[1] - a[1]);
+              return { label: entries[0][0], confidence: entries[0][1] };
+            } catch (e) {
+              return null;
+            }
+          };
+
+          let finalLabel = null;
+          let finalConfidence = null;
+
+          if (resultData.result) {
+            finalLabel = resultData.result;
+            finalConfidence = resultData.confidence ?? null;
+          } else if (resultData.output?.label) {
+            finalLabel = resultData.output.label;
+            finalConfidence = resultData.output.confidence ?? null;
+          } else if (resultData.label) {
+            finalLabel = resultData.label;
+            finalConfidence = resultData.confidence ?? null;
+          } else if (typeof resultData.prediction === 'number') {
+            // Some models return numeric prediction indices (0/1)
+            finalLabel = resultData.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            finalConfidence = resultData.probabilities?.[String(resultData.prediction)] ?? resultData.confidence ?? null;
+          } else {
+            const fromProbs = extractFromProbabilities(resultData.metadata?.probabilities || resultData.probabilities);
+            if (fromProbs) {
+              finalLabel = fromProbs.label;
+              finalConfidence = fromProbs.confidence;
+            }
+          }
+
+          // Normalize label to uppercase common tokens used by UI
+          if (finalLabel && typeof finalLabel === 'string') {
+            finalLabel = finalLabel.toUpperCase();
+            if (finalLabel === 'HAM') finalLabel = 'NOT_SPAM';
+          }
+
           setResult({
             requestId,
-            result: resultData.result || (resultData.output?.label || 'UNKNOWN'),
-            confidence: resultData.confidence || (resultData.output?.confidence || 0)
+            result: finalLabel || 'UNKNOWN',
+            confidence: typeof finalConfidence === 'number' ? finalConfidence : (resultData.confidence ?? (resultData.output?.confidence ?? 0))
           });
 
           toast.success('Inference completed!');

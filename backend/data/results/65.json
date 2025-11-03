@@ -1,0 +1,13 @@
+{
+  "requestId": "65",
+  "modelId": "12",
+  "result": "SPAM",
+  "confidence": 0.660000373113445,
+  "metadata": {
+    "probabilities": {
+      "NOT_SPAM": 0.3399996268865549,
+      "SPAM": 0.660000373113445
+    }
+  },
+  "timestamp": 1762129700528
+}
