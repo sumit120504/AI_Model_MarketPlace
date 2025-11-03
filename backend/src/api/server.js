@@ -140,35 +140,95 @@ class APIServer {
         const { requestId } = req.params;
         const request = await this.blockchain.getRequest(requestId);
           
-          // Try to enrich response with locally stored result data and progress info
-          try {
-            const resultsPath = path.join(process.cwd(), 'data', 'results', `${requestId}.json`);
-            
-            // Get progress information from engine cache
-            const progressInfo = this.engine && this.engine.cache ? 
-              this.engine.cache.get(`progress_${requestId}`) : null;
-            
-            if (progressInfo) {
-              request.progress = progressInfo;
-            }
-            
-            if (fs.existsSync(resultsPath)) {
+        // Try to enrich response with locally stored result data and progress info
+        try {
+          const resultsPath = path.join(process.cwd(), 'data', 'results', `${requestId}.json`);
+          
+          // Get progress information from engine cache
+          const progressInfo = this.engine && this.engine.cache ? 
+            this.engine.cache.get(`progress_${requestId}`) : null;
+          
+          if (progressInfo) {
+            request.progress = progressInfo;
+          }
+          
+          if (fs.existsSync(resultsPath)) {
+            try {
               const resultContent = await fs.promises.readFile(resultsPath, 'utf8');
               const parsed = JSON.parse(resultContent);
-              request.resultData = parsed;
-            } else {
-              // If we cached an IPFS pointer in the engine cache, attach it
-              const cached = this.engine && this.engine.cache ? 
-                this.engine.cache.get(`result_${requestId}`) : null;
-              if (cached && cached.ipfsHash) {
+              
+              // Validate the result data structure
+              if (parsed) {
+                if (parsed.result === undefined || parsed.result === null) {
+                  logger.warn(`[Request ${requestId}] Result file missing 'result' field`);
+                  throw new Error('Invalid result format: missing result field');
+                }
+
+                // Ensure result is uppercase and normalized
+                request.result = String(parsed.result).toUpperCase();
+                if (request.result === 'HAM') request.result = 'NOT_SPAM';
+                
+                // Normalize confidence to be between 0 and 1
+                request.confidence = typeof parsed.confidence === 'number' ? 
+                  Math.max(0, Math.min(1, parsed.confidence)) : null;
+                
+                // Ensure metadata exists and has probabilities
+                request.metadata = parsed.metadata || {};
+                if (!request.metadata.probabilities && typeof request.confidence === 'number') {
+                  // Reconstruct probabilities if missing
+                  request.metadata.probabilities = {
+                    [request.result]: request.confidence,
+                    [request.result === 'SPAM' ? 'NOT_SPAM' : 'SPAM']: 1 - request.confidence
+                  };
+                }
+                
+                // Keep the full result data
+                request.resultData = parsed;
+
+                logger.info(`[Request ${requestId}] Result loaded and normalized:`, {
+                  result: request.result,
+                  confidence: request.confidence,
+                  metadata: request.metadata
+                });
+              }
+
+              logger.info(`[Request ${requestId}] Enriched with result data:`, {
+                result: request.result,
+                confidence: request.confidence,
+                metadata: request.metadata
+              });
+            } catch (parseError) {
+              logger.warn(`[Request ${requestId}] Failed to parse result file:`, parseError);
+              throw parseError;
+            }
+          } else {
+            // If we cached an IPFS pointer in the engine cache, attach it
+            const cached = this.engine && this.engine.cache ? 
+              this.engine.cache.get(`result_${requestId}`) : null;
+            if (cached) {
+              if (cached.ipfsHash) {
                 request.resultData = { ipfsHash: cached.ipfsHash };
               }
+              // Also check if we have cached the actual result
+              if (cached.result) {
+                request.result = cached.result;
+                request.confidence = cached.confidence;
+                request.metadata = cached.metadata;
+              }
             }
-          } catch (enrichErr) {
-            logger.warn(`Failed to enrich request ${requestId} with result data: ${enrichErr.message}`);
           }
+        } catch (enrichErr) {
+          logger.warn(`Failed to enrich request ${requestId} with result data: ${enrichErr.message}`);
+        }
 
-          res.json(request);
+        // Ensure the response has the correct structure
+        res.json({
+          ...request,
+          result: request.result || undefined,
+          confidence: request.confidence || undefined,
+          metadata: request.metadata || undefined,
+          resultData: request.resultData || undefined
+        });
       } catch (error) {
         res.status(500).json({ error: error.message });
       }

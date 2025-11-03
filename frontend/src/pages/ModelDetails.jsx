@@ -116,13 +116,53 @@ function ModelDetails() {
         attempts++;
 
         // Prefer backend API which can return the result payload saved by compute node
+        console.log(`Polling request ${requestId}...`);
         const resp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/requests/${requestId}`);
+        console.log('Response status:', resp.status);
+        
         if (!resp.ok) {
           const errorText = await resp.text();
+          console.error('Error response:', errorText);
           throw new Error(`Failed to fetch request status: ${errorText}`);
         }
-        const request = await resp.json();
-        if (!request) throw new Error('Invalid response format');
+        
+      const request = await resp.json();
+      // Enhanced logging of the full response structure
+      console.log('Full response details:', {
+        status: request?.status,
+        statusText: request?.statusText,
+        resultData: request?.resultData,
+        result: request?.result,
+        output: request?.output,
+        prediction: request?.prediction,
+        metadata: request?.metadata,
+        fullObject: JSON.stringify(request, null, 2)
+      });
+      
+      // Deep clone the request to prevent reference issues
+      try {
+        request.resultData = request.resultData ? JSON.parse(JSON.stringify(request.resultData)) : undefined;
+      } catch (cloneError) {
+        console.warn('Failed to clone resultData:', cloneError);
+      }
+      
+      if (!request) throw new Error('Invalid response format');
+      
+      // Ensure result is properly normalized if present
+      if (request.result) {
+        request.result = String(request.result).toUpperCase();
+        if (request.result === 'HAM') request.result = 'NOT_SPAM';
+      }        // Check if request is still processing and update UI accordingly
+        if (request.status === '1' || request.statusText === 'COMPUTING') {
+          console.log('Request still processing...');
+          // Update the status but don't extract results yet
+          setRequestStatus(request.statusText || 'COMPUTING');
+          setProgressInfo(request.progress || {
+            status: request.statusText || 'COMPUTING',
+            progress: 50 // Default to 50% while computing
+          });
+          return; // Exit early and wait for next poll
+        }
 
         // Debug: log the raw request shape so we can see how resultData is returned
         console.debug('Polled request:', request);
@@ -138,41 +178,230 @@ function ModelDetails() {
           }
         }
 
-        // Update status and progress
-        setRequestStatus(request.statusText || 'PENDING');
+                  // Update status and progress with more detailed status tracking
+        const newStatus = request.statusText || (request.status === '1' ? 'COMPUTING' : 'PENDING');
+        setRequestStatus(newStatus);
+        
+        // More granular progress tracking
         if (request.progress) {
           setProgressInfo(request.progress);
         } else {
-          // Estimate progress based on status
+          // Enhanced progress estimation based on status
           const stageRanges = {
             'PENDING': [0, 10],
             'DOWNLOADING': [10, 30],
             'INITIALIZING': [30, 50],
+            'COMPUTING': [40, 70],
             'PROCESSING': [50, 80],
             'SAVING': [80, 95],
+            'WAITING_FOR_RESULT': [95, 98], // New stage for waiting for result file
             'COMPLETED': [100, 100],
             'FAILED': [0, 0]
           };
-          const [min, max] = stageRanges[request.statusText] || [0, 0];
+          
+          // Get progress range for current status
+          const [min, max] = stageRanges[newStatus] || [0, 0];
+          
+          // Calculate progress within the stage
+          const elapsed = Date.now() - (window.requestStartTime || Date.now());
+          const stageProgress = Math.min(1, elapsed / 30000); // Assume each stage takes ~30s max
+          const progress = min + (stageProgress * (max - min));
+          
           setProgressInfo({
-            status: request.statusText,
-            progress: Math.floor(min + (Math.random() * (max - min)))
+            status: newStatus,
+            progress: Math.floor(progress)
+          });
+          
+          // Log detailed progress info for debugging
+          console.log('Progress update:', {
+            status: newStatus,
+            progress: Math.floor(progress),
+            elapsed: `${(elapsed/1000).toFixed(1)}s`,
+            stage: `${min}-${max}%`
           });
         }
 
         // Completed status (2 = COMPLETED)
         if (request.status === '2' || request.status === 2 || request.statusText === 'COMPLETED') {
+          console.log('Request completed, details:', {
+            status: request.statusText,
+            resultData: request.resultData,
+            result: request.result,
+            attempts
+          });
+
+          // When completed, try to fetch result multiple times
+          if (!request.resultData && !request.result && attempts < MAX_ATTEMPTS) {
+            setRequestStatus('WAITING_FOR_RESULT');
+            setProgressInfo({
+              status: 'WAITING_FOR_RESULT',
+              progress: 95
+            });
+
+            // Create a function to check result file directly
+            const checkResultFile = async () => {
+              try {
+                const resultResp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/requests/${requestId}`);
+                if (resultResp.ok) {
+                  const resultData = await resultResp.json();
+                  console.log('Result file check:', resultData);
+                  
+                  if (resultData.resultData || resultData.result) {
+                    clearInterval(interval);
+                    setPollingInterval(null);
+                    setProcessing(false);
+                    
+                    // Update request object with new data
+                    request.resultData = resultData.resultData;
+                    request.result = resultData.result;
+                    request.confidence = resultData.confidence;
+                    return true;
+                  }
+                }
+                return false;
+              } catch (err) {
+                console.warn('Error checking result file:', err);
+                return false;
+              }
+            };
+
+            // Try to check result file immediately
+            const hasResult = await checkResultFile();
+            if (hasResult) {
+              console.log('Found result file on immediate check');
+            } else {
+              // If no immediate result, set up rapid polling
+              console.log('No immediate result, setting up rapid result checks...');
+              clearInterval(interval);
+              
+              // Check every 500ms for up to 10 seconds
+              let checks = 0;
+              const maxChecks = 20;
+              const newInterval = setInterval(async () => {
+                checks++;
+                if (checks >= maxChecks) {
+                  clearInterval(newInterval);
+                  setPollingInterval(null);
+                  setProcessing(false);
+                  console.log('Gave up waiting for result file after 10 seconds');
+                  return;
+                }
+                
+                const found = await checkResultFile();
+                if (found) {
+                  console.log(`Found result file after ${checks * 500}ms`);
+                  clearInterval(newInterval);
+                }
+              }, 500);
+              
+              setPollingInterval(newInterval);
+              return;
+            }
+          }
+          
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
+          
+          // Wait a bit after completion to ensure result is available
+          if (attempts === 1) {
+            console.log('First completion detection, waiting 2s for result sync...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // Fetch the result again after waiting
+            const retryResp = await fetch(`${BACKEND_API.replace(/\/+$/, '')}/requests/${requestId}`);
+            if (retryResp.ok) {
+              const retryRequest = await retryResp.json();
+              // Use the retry response if it has more data
+              if (retryRequest.resultData || retryRequest.result) {
+                console.log('Got result after retry:', retryRequest);
+                request.resultData = retryRequest.resultData;
+                request.result = retryRequest.result;
+                request.confidence = retryRequest.confidence;
+              }
+            }
+          }
 
-          const resultData = request.resultData || {};
+          // Initialize result data object, trying multiple possible locations
+          let resultData = {};
+          
+          // First try resultData object
+          if (request.resultData) {
+            console.log('Found resultData object:', request.resultData);
+            if (typeof request.resultData === 'string') {
+              try {
+                resultData = JSON.parse(request.resultData);
+                console.log('Parsed resultData from string:', resultData);
+              } catch (e) {
+                console.warn('Failed to parse resultData string:', e);
+                // If parsing fails, try using it as is
+                resultData = { result: request.resultData };
+              }
+            } else {
+              resultData = request.resultData;
+            }
+          }
+          
+          // If no resultData, check direct fields
+          if (!resultData || Object.keys(resultData).length === 0) {
+            console.log('Checking direct result fields');
+            if (request.result !== undefined) {
+              console.log('Found direct result:', request.result);
+              resultData = {
+                result: request.result,
+                confidence: request.confidence
+              };
+            }
+          }
+          
+          // Check for nested output structure
+          if ((!resultData || Object.keys(resultData).length === 0) && request.output) {
+            console.log('Checking output structure:', request.output);
+            resultData = {
+              result: request.output.label || request.output.result,
+              confidence: request.output.confidence
+            };
+          }
 
-          // Robust result extraction: handle multiple possible shapes that
-          // the backend or compute node might return. Prefer explicit
-          // `result` and `confidence`, then `output.label`/`output.confidence`,
-          // then numeric `prediction`, then fall back to highest-probability
-          // label found in metadata.probabilities.
+          // Look for result in the exact backend format
+          if (!resultData || Object.keys(resultData).length === 0) {
+            console.log('Checking for backend result format');
+            
+            // Check for direct result fields first (main format)
+            if (request.result !== undefined && request.confidence !== undefined) {
+              console.log('Found standard result format:', {
+                result: request.result,
+                confidence: request.confidence,
+                metadata: request.metadata
+              });
+              
+              resultData = {
+                result: request.result,
+                confidence: request.confidence,
+                metadata: request.metadata
+              };
+            }
+            // Fallback to checking metadata.probabilities
+            else if (request.metadata?.probabilities) {
+              console.log('Found probabilities in metadata:', request.metadata.probabilities);
+              const probs = request.metadata.probabilities;
+              const entries = Object.entries(probs);
+              if (entries.length > 0) {
+                entries.sort((a, b) => b[1] - a[1]); // Sort by probability
+                const [topLabel, topProb] = entries[0];
+                resultData = {
+                  result: topLabel,
+                  confidence: topProb,
+                  metadata: request.metadata
+                };
+              }
+            }
+          }
+
+          console.log('Final extracted resultData:', resultData);
+
+          // Primary result extraction complete, process according to exact format
+          // from backend that has {result, confidence, metadata.probabilities}
           const extractFromProbabilities = (probs) => {
             try {
               const entries = Object.entries(probs || {});
@@ -187,7 +416,7 @@ function ModelDetails() {
           let finalLabel = null;
           let finalConfidence = null;
 
-          if (resultData.result) {
+          if (typeof resultData.result !== 'undefined') {
             finalLabel = resultData.result;
             finalConfidence = resultData.confidence ?? null;
           } else if (resultData.output?.label) {
@@ -214,17 +443,40 @@ function ModelDetails() {
             if (finalLabel === 'HAM') finalLabel = 'NOT_SPAM';
           }
 
+          // Debug: show what will be set
+          console.debug('Setting result:', { finalLabel, finalConfidence });
+          
+          // Format confidence for toast display
+          const confidenceDisplay = typeof finalConfidence === 'number' 
+            ? `${(finalConfidence * 100).toFixed(1)}%`
+            : 'N/A';
+            
+          toast.success(`Result: ${finalLabel || 'UNKNOWN'} | Confidence: ${confidenceDisplay}`, {
+            duration: 4000
+          });
+
           setResult({
             requestId,
             result: finalLabel || 'UNKNOWN',
-            confidence: typeof finalConfidence === 'number' ? finalConfidence : (resultData.confidence ?? (resultData.output?.confidence ?? 0))
+            confidence: finalConfidence || 0,
+            metadata: resultData?.metadata || null
           });
 
-          toast.success('Inference completed!');
+          // Show detailed result notification
+          const confidencePercent = (finalConfidence * 100).toFixed(1);
+          const otherClass = finalLabel === 'SPAM' ? 'NOT_SPAM' : 'SPAM';
+          const otherProb = probabilities?.[otherClass];
+          const otherPercent = otherProb ? (otherProb * 100).toFixed(1) : '0.0';
+          
+          toast.success(
+            `Result: ${finalLabel} (${confidencePercent}% confident)\n` +
+            `Alternative: ${otherClass} (${otherPercent}%)`, 
+            { duration: 5000 }
+          );
           return;
         }
 
-        // Failed
+        // Failed - Enhanced error handling
         if (request.status === '3' || request.statusText === 'FAILED') {
           clearInterval(interval);
           setPollingInterval(null);
@@ -233,10 +485,18 @@ function ModelDetails() {
             status: 'FAILED',
             progress: 0
           });
-          toast.error('Inference failed: ' + (request.failureReason || 'Unknown error'));
+          
+          // Enhanced error message with more context
+          const errorContext = request.failureReason 
+            ? `Error: ${request.failureReason}`
+            : `Request #${requestId} failed without error details. Status: ${request.statusText || 'FAILED'}`;
+          
+          console.error('Inference failed:', errorContext);
+          toast.error(errorContext, { duration: 5000 });
           return;
         }
 
+        // Timeout handling with more context
         if (attempts >= MAX_ATTEMPTS) {
           clearInterval(interval);
           setPollingInterval(null);
@@ -449,7 +709,7 @@ function ModelDetails() {
               )}
             </div>
             
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div>
                 <div className="text-gray-400 text-sm">Classification</div>
                 <div className={`text-2xl font-bold ${
@@ -460,9 +720,35 @@ function ModelDetails() {
               </div>
               
               <div>
-                <div className="text-gray-400 text-sm">Confidence</div>
-                <div className="text-xl font-semibold">
-                  {(result.confidence * 100).toFixed(1)}%
+                <div className="text-gray-400 text-sm mb-1">Confidence</div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xl font-semibold">
+                      {(result.confidence * 100).toFixed(1)}%
+                    </span>
+                    <span className={result.result === 'SPAM' ? 'text-red-400' : 'text-green-400'}>
+                      {result.result}
+                    </span>
+                  </div>
+                  
+                  {result.metadata?.probabilities && (
+                    <div className="flex justify-between items-center text-sm">
+                      <span>{((1 - result.confidence) * 100).toFixed(1)}%</span>
+                      <span className="text-gray-400">
+                        {result.result === 'SPAM' ? 'NOT_SPAM' : 'SPAM'}
+                      </span>
+                    </div>
+                  )}
+                  
+                  {/* Confidence bar */}
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        result.result === 'SPAM' ? 'bg-red-400' : 'bg-green-400'
+                      }`}
+                      style={{ width: `${result.confidence * 100}%` }}
+                    />
+                  </div>
                 </div>
               </div>
               

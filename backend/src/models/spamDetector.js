@@ -160,18 +160,44 @@ class SpamDetector {
         throw new Error(errorMessage);
       }
 
-      // Log detailed results
-      logger.info(`Detection complete: ${results.result} (confidence: ${results.confidence})`);
-      if (results.details) {
-        logger.debug('Detection details:', {
-          spamConfidence: results.details.spam_confidence,
-          notSpamConfidence: results.details.not_spam_confidence,
-          inputLength: results.details.input_length,
-          modelMetadata: results.details.model_metadata
-        });
+      // Normalize result format
+      const normalizedResult = {
+        success: true,
+        result: String(results.result || results.output?.label || results.prediction || 'UNKNOWN').toUpperCase(),
+        confidence: typeof results.confidence === 'number' ? 
+          Math.max(0, Math.min(1, results.confidence)) : 
+          results.output?.confidence || 1.0,
+        metadata: {
+          ...results.details,
+          probabilities: {}
+        }
+      };
+
+      // Convert HAM to NOT_SPAM for consistency
+      if (normalizedResult.result === 'HAM') {
+        normalizedResult.result = 'NOT_SPAM';
       }
 
-      return results;
+      // Handle numeric predictions (0/1)
+      if (results.prediction === 0 || results.prediction === 1) {
+        normalizedResult.result = results.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+      }
+
+      // Ensure probabilities exist
+      if (!normalizedResult.metadata.probabilities) {
+        normalizedResult.metadata.probabilities = {
+          [normalizedResult.result]: normalizedResult.confidence,
+          [normalizedResult.result === 'SPAM' ? 'NOT_SPAM' : 'SPAM']: 1 - normalizedResult.confidence
+        };
+      }
+
+      // Log detailed results
+      logger.info(`Detection complete: ${normalizedResult.result} (confidence: ${normalizedResult.confidence})`);
+      if (results.details) {
+        logger.debug('Detection details:', normalizedResult.metadata);
+      }
+
+      return normalizedResult;
       
     } catch (error) {
       logger.error('Spam detection failed:', error);

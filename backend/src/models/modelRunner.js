@@ -321,34 +321,44 @@ class ModelRunner {
         metadata: results.metadata || {}
       };
 
-      // Handle result from our spam detector model
-      if (results.output) {
+      // First, try to extract result from standard format
+      if (results.result !== undefined) {
+        logger.debug('Found standard result format:', results);
+        processedResults.result = String(results.result).toUpperCase();
+        if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
+        processedResults.confidence = results.confidence;
+        processedResults.metadata = results.metadata || {};
+      }
+      // Then try output format
+      else if (results.output) {
         logger.debug('Processing model output:', results.output);
         
-        // Direct format from our spam detector
         const output = results.output;
+        // Direct format from our spam detector
         if (output.label && output.confidence && output.probabilities) {
           logger.debug('Found standard spam detector output format');
-          processedResults.result = output.label;
+          processedResults.result = String(output.label).toUpperCase();
+          if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
           processedResults.confidence = output.confidence;
           processedResults.metadata.probabilities = output.probabilities;
           logger.debug('Processed output:', processedResults);
-          return processedResults;
         }
-        
-        logger.debug('Standard format not found, checking alternatives...');
-        
-        // Alternative formats
-        if (typeof output === 'object') {
+        // Handle alternative formats
+        else if (typeof output === 'object') {
           if ('prediction' in output) {
             processedResults.result = output.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
             processedResults.confidence = output.probabilities?.[output.prediction] || 1.0;
+            if (output.probabilities) {
+              processedResults.metadata.probabilities = output.probabilities;
+            }
           } else if (output.label) {
-            processedResults.result = output.label;
+            processedResults.result = String(output.label).toUpperCase();
+            if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
             processedResults.confidence = output.confidence || 1.0;
           }
         } else if (typeof output === 'string') {
-          processedResults.result = output;
+          processedResults.result = String(output).toUpperCase();
+          if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
           processedResults.confidence = 1.0;
         }
       }
