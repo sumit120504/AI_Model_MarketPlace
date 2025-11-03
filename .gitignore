@@ -193,11 +193,13 @@ frontend/src/abis/generated/
 # ============================================
 
 # Large AI model files (use IPFS instead)
+backend/models
 backend/models/downloaded/*.h5
 backend/models/downloaded/*.pb
 backend/models/downloaded/*.pkl
 backend/models/downloaded/*.onnx
 backend/models/*.pt
+backend/models/*.json
 backend/models/*.pth
 *.model
 
