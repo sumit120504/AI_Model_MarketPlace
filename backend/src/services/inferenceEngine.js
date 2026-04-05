@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 import NodeCache from 'node-cache';
 import path from 'path';
 import fs from 'fs';
+import { ethers } from 'ethers';
 
 class InferenceEngine {
   constructor() {
@@ -68,6 +69,11 @@ class InferenceEngine {
     setInterval(async () => {
       await this.pollPendingRequests();
     }, 30000); // Every 30 seconds
+
+    // Enforce compute timeout expectations off-chain as well.
+    setInterval(async () => {
+      await this.enforceComputeTimeouts();
+    }, 30000);
     
     // Log stats periodically
     setInterval(() => {
@@ -155,6 +161,8 @@ class InferenceEngine {
     };
     
     try {
+      let modelPath;
+
       // Start request processing
       logger.logInference(requestId, 'Starting', {
         ...request,
@@ -205,7 +213,7 @@ class InferenceEngine {
         
         // Use model metadata to determine file extension, or default to .pkl
         const modelExt = model.metadata?.fileExtension || '.pkl';
-        const modelPath = path.join(modelsDir, `${model.modelId}${modelExt}`);
+        modelPath = path.join(modelsDir, `${model.modelId}${modelExt}`);
         
         // Check if model already exists and validate it
         let needsDownload = true;
@@ -319,13 +327,24 @@ class InferenceEngine {
           metadata: result.metadata || {},
           timestamp: Date.now()
         });
+
+        if (!modelPath) {
+          throw new Error('Model path missing before proof generation');
+        }
+
+        const modelBytes = await fs.promises.readFile(modelPath);
+        const modelWeightsHash = ethers.utils.sha256(modelBytes);
         
         logger.info(`[Request #${requestId}] Submitting result:`, { 
           result: result.result,
           confidence: result.confidence
         });
         
-        const submitResponse = await this.blockchain.submitResult(requestId, resultData);
+        const submitResponse = await this.blockchain.submitResult(requestId, resultData, {
+          inputDataHash: requestDetails.inputDataHash,
+          modelWeightsHash,
+          proofTimestamp: Math.floor(Date.now() / 1000)
+        });
         
         if (!submitResponse || !submitResponse.success) {
           throw new Error('Failed to submit result to blockchain');
@@ -511,25 +530,47 @@ class InferenceEngine {
       return inputData;
       
     } catch (ipfsError) {
-      logger.warn(`Failed to fetch from IPFS: ${ipfsError.message}, using sample data`);
-      
-      // Fallback to sample data for testing
-      const sampleEmails = [
-        "Hi John, let's meet for coffee tomorrow at 3pm. Looking forward to catching up!",
-        "CONGRATULATIONS! You've WON $1,000,000! Click here NOW to claim your prize!!!",
-        "Meeting reminder: Q4 planning session scheduled for Monday 10am in Conference Room B",
-        "🎉 FREE MONEY! Limited time offer! Act now and get rich quick! No risk!!!",
-        "Your package has been delivered. Tracking number: 1Z999AA10123456784",
-        "Buy now! Special discount! Click here! Hurry before it's too late!!!"
-      ];
-      
-      // Use hash to deterministically select an email
-      const hashNum = parseInt(inputDataHash.slice(2, 10), 16);
-      inputData = sampleEmails[hashNum % sampleEmails.length];
-      
-      // Cache sample data too
-      this.cache.set(inputDataHash, inputData);
-      return inputData;
+      logger.error(`Failed to fetch input from IPFS for ${inputDataHash}: ${ipfsError.message}`);
+      throw new Error('Unable to resolve inference input from IPFS/cache');
+    }
+  }
+
+  async enforceComputeTimeouts() {
+    try {
+      const timeoutConfig = await this.blockchain.getTimeoutConfig();
+      const maxComputeMs = timeoutConfig.computeTimeoutSeconds * 1000;
+
+      for (const [requestId, processingInfo] of this.processing.entries()) {
+        const pickupStep = processingInfo.steps?.pickup;
+        const submissionStep = processingInfo.steps?.submission;
+
+        if (!pickupStep || pickupStep.status !== 'completed' || !pickupStep.endTime) {
+          continue;
+        }
+
+        if (submissionStep && submissionStep.status === 'completed') {
+          continue;
+        }
+
+        const elapsedSincePickup = Date.now() - pickupStep.endTime;
+        if (elapsedSincePickup <= maxComputeMs) {
+          continue;
+        }
+
+        logger.warn(
+          `[Request #${requestId}] compute timeout exceeded (${elapsedSincePickup}ms), reporting failure`
+        );
+
+        try {
+          await this.blockchain.reportFailure(requestId, 'Compute timeout exceeded');
+        } catch (reportError) {
+          logger.error(`[Request #${requestId}] timeout failure report failed: ${reportError.message}`);
+        }
+
+        this.processing.delete(requestId);
+      }
+    } catch (error) {
+      logger.error(`Timeout watcher error: ${error.message}`);
     }
   }
   

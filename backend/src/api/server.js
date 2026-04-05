@@ -233,6 +233,45 @@ class APIServer {
         res.status(500).json({ error: error.message });
       }
     });
+
+    // Request refund for a timed-out inference request
+    this.app.post('/requests/:requestId/refund', async (req, res) => {
+      try {
+        const { requestId } = req.params;
+        const result = await this.blockchain.requestRefund(requestId);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Get user's refundable escrow balance
+    this.app.get('/users/:address/refundable-balance', async (req, res) => {
+      try {
+        const { address } = req.params;
+        const balanceWei = await this.blockchain.inferenceMarket.refundableUserBalances(address);
+        res.json({
+          address,
+          refundableBalance: ethers.utils.formatEther(balanceWei)
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Withdraw refundable escrow balance using configured backend wallet
+    this.app.post('/users/refundable-balance/withdraw', async (req, res) => {
+      try {
+        const tx = await this.blockchain.executeWithRetry(async (gasSettings) => {
+          const txResponse = await this.blockchain.inferenceMarket.withdrawRefundableBalance(gasSettings);
+          const receipt = await txResponse.wait();
+          return { txHash: txResponse.hash, receipt };
+        });
+        res.json({ success: true, ...tx });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
     
     // Get model details
     this.app.get('/models/:modelId', async (req, res) => {

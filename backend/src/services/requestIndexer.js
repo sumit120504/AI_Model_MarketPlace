@@ -70,13 +70,14 @@ class RequestIndexer {
     });
 
     // Listen for completion
-    this.blockchain.inferenceMarket.on('InferenceCompleted', (requestId, resultHash, computeNode, event) => {
+    this.blockchain.inferenceMarket.on('InferenceCompleted', (requestId, resultHash, proofHash, computeNode, event) => {
       logger.info(`✅ Request completed: #${requestId.toString()}`);
       this.pendingRequests.delete(requestId.toString());
       this.cache.set(`request_${requestId}`, {
         ...this.cache.get(`request_${requestId}`),
         status: 'COMPLETED',
         resultHash,
+        proofHash,
         completedAt: event.blockNumber
       });
     });

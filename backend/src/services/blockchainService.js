@@ -8,7 +8,7 @@ const INFERENCE_MARKET_ABI = [
   // Events
   "event InferenceRequested(uint256 indexed requestId, uint256 indexed modelId, address indexed user, bytes32 inputDataHash, uint256 payment)",
   "event InferenceComputing(uint256 indexed requestId, address indexed computeNode)",
-  "event InferenceCompleted(uint256 indexed requestId, bytes32 resultHash, address computeNode)",
+  "event InferenceCompleted(uint256 indexed requestId, bytes32 resultHash, bytes32 proofHash, address indexed computeNode)",
   "event InferenceFailed(uint256 indexed requestId, string reason)",
   "event PaymentReleased(uint256 indexed requestId, address indexed creator, address indexed computeNode, uint256 creatorAmount, uint256 nodeAmount, uint256 platformFee)",
   "event UserRefunded(uint256 indexed requestId, address indexed user, uint256 amount)",
@@ -17,12 +17,13 @@ const INFERENCE_MARKET_ABI = [
   
   // Core Functions
   "function pickupRequest(uint256 _requestId) external",
+  "function submitResult(uint256 _requestId, bytes32 _resultHash, bytes32 _proofHash, bytes _signature, bytes32 _modelWeightsHash, uint256 _proofTimestamp, bytes _resultData) external",
   "function submitResult(uint256 _requestId, bytes32 _resultHash, string memory _resultData) external",
   "function reportFailure(uint256 _requestId, string memory _reason) external",
   "function requestRefund(uint256 _requestId) external",
   
   // View Functions
-  "function getRequest(uint256 _requestId) external view returns (tuple(uint256 requestId, uint256 modelId, address user, uint256 payment, bytes32 inputDataHash, bytes32 resultHash, address computeNode, uint256 createdAt, uint256 completedAt, uint8 status))",
+  "function getRequest(uint256 _requestId) external view returns (tuple(uint256 requestId, uint256 modelId, address user, uint256 payment, bytes32 inputDataHash, bytes32 resultHash, bytes32 proofHash, address computeNode, uint256 createdAt, uint256 pickedUpAt, uint256 completedAt, uint8 status))",
   "function getPendingRequests() external view returns (uint256[] memory)",
   "function getUserRequests(address _user) external view returns (uint256[] memory)",
   "function getRequestStatus(uint256 _requestId) external view returns (string memory)",
@@ -31,30 +32,42 @@ const INFERENCE_MARKET_ABI = [
   // Node Management
   "function authorizedComputeNodes(address) external view returns (bool)",
   "function nodeEarnings(address) external view returns (uint256)",
+  "function creatorEarnings(address) external view returns (uint256)",
+  "function refundableUserBalances(address) external view returns (uint256)",
   "function withdrawNodeEarnings() external",
+  "function withdrawCreatorEarnings() external",
+  "function withdrawRefundableBalance() external",
   
   // Constants
-  "function TIMEOUT_DURATION() external view returns (uint256)",
+  "function REQUEST_PICKUP_TIMEOUT() external view returns (uint256)",
+  "function COMPUTE_TIMEOUT() external view returns (uint256)",
   "function PLATFORM_FEE_PERCENT() external view returns (uint256)",
   "function COMPUTE_NODE_FEE_PERCENT() external view returns (uint256)"
 ];
 
 const MODEL_REGISTRY_ABI = [
   // Core View Functions
-  "function getModel(uint256 _modelId) external view returns (tuple(uint256 modelId, address creator, string ipfsHash, string name, string description, uint8 category, uint256 pricePerInference, uint256 creatorStake, uint256 totalInferences, uint256 totalEarnings, uint256 reputationScore, uint256 createdAt, bool isActive))",
+  "function getModel(uint256 _modelId) external view returns (tuple(uint256 modelId, address creator, string ipfsHash, string name, string description, uint8 category, uint256 pricePerInference, uint256 creatorStake, uint256 totalInferences, uint256 totalEarnings, uint256 reputationScore, uint256 evaluationScore, uint256 createdAt, uint256 updatedAt, uint256 currentVersion, uint256 lastPriceUpdate, uint256 deactivatedAt, bytes32 currentProvenanceHash, bool isActive))",
   "function isModelAvailable(uint256 _modelId) external view returns (bool)",
   "function getCreatorModels(address _creator) external view returns (uint256[] memory)",
   "function getActiveModels() external view returns (uint256[] memory)",
   "function getTotalModels() external view returns (uint256)",
+  "function getModelVersions(uint256 _modelId) external view returns (tuple(uint256 version, string ipfsHash, bytes32 provenanceHash, uint256 timestamp)[] memory)",
   
   // State Changing Functions
   "function registerModel(string calldata _ipfsHash, string calldata _name, string calldata _description, uint8 _category, uint256 _pricePerInference) external payable returns (uint256)",
+  "function updateModel(uint256 _modelId, string memory _newIpfsHash, string memory _newDescription) external",
+  "function updatePrice(uint256 _modelId, uint256 _newPrice) external",
+  "function addStake(uint256 _modelId) external payable",
+  "function withdrawStake(uint256 _modelId, uint256 _amount) external",
   "function recordInference(uint256 _modelId, uint256 _payment) external",
   "function penalizeModel(uint256 _modelId, uint256 _slashAmount) external",
   
   // Events
   "event ModelRegistered(uint256 indexed modelId, address indexed creator, string name, uint256 pricePerInference)",
-  "event ModelUpdated(uint256 indexed modelId, uint256 newPrice)",
+  "event ModelPriceUpdated(uint256 indexed modelId, uint256 oldPrice, uint256 newPrice)",
+  "event ModelMetadataUpdated(uint256 indexed modelId, string ipfsHash, string description)",
+  "event ModelVersionAdded(uint256 indexed modelId, uint256 indexed version, string ipfsHash, bytes32 provenanceHash)",
   "event ModelDeactivated(uint256 indexed modelId)",
   "event ModelActivated(uint256 indexed modelId)",
   "event ReputationUpdated(uint256 indexed modelId, uint256 newScore)",
@@ -184,10 +197,12 @@ class BlockchainService {
         payment: ethers.utils.formatEther(request.payment),
         inputDataHash: request.inputDataHash,
         resultHash: request.resultHash,
+        proofHash: request.proofHash,
         computeNode: request.computeNode,
         createdAt: request.createdAt.toString(),
+        pickedUpAt: request.pickedUpAt.toString(),
         completedAt: request.completedAt.toString(),
-        status: request.status, // Numeric status
+        status: Number(request.status), // Numeric status
         statusText: status // Human readable status
       };
     } catch (error) {
@@ -208,7 +223,7 @@ class BlockchainService {
       const categories = [
         'TEXT_CLASSIFICATION',
         'IMAGE_CLASSIFICATION',
-        'SENTIMENT_ANALYSIS',
+        'REGRESSION',
         'OTHER'
       ];
       
@@ -227,7 +242,11 @@ class BlockchainService {
         totalInferences: model.totalInferences.toString(),
         totalEarnings: ethers.utils.formatEther(model.totalEarnings),
         reputationScore: model.reputationScore.toNumber(),
+        evaluationScore: model.evaluationScore.toNumber(),
         createdAt: new Date(model.createdAt.toNumber() * 1000).toISOString(),
+        updatedAt: new Date(model.updatedAt.toNumber() * 1000).toISOString(),
+        currentVersion: model.currentVersion.toNumber(),
+        currentProvenanceHash: model.currentProvenanceHash,
         isActive: model.isActive,
         isAvailable: isAvailable // Includes both active status and sufficient stake check
       };
@@ -351,16 +370,41 @@ class BlockchainService {
   /**
    * Submit inference result with proof
    */
-  async submitResult(requestId, resultData) {
+  async submitResult(requestId, resultData, proofContext = {}) {
     return this.executeWithRetry(async (gasSettings) => {
       logger.info(`Submitting result for request #${requestId}...`);
       
       const resultHash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(resultData));
       logger.info(`Result Hash: ${resultHash}`);
+
+      const request = await this.getRequest(requestId);
+      const inputDataHash = proofContext.inputDataHash || request.inputDataHash;
+      const modelWeightsHash = proofContext.modelWeightsHash;
+      const proofTimestamp = proofContext.proofTimestamp || Math.floor(Date.now() / 1000);
+
+      if (!modelWeightsHash) {
+        throw new Error('modelWeightsHash is required for secure submitResult');
+      }
+
+      const proofHash = ethers.utils.solidityKeccak256(
+        ['uint256', 'bytes32', 'bytes32', 'bytes32', 'uint256'],
+        [requestId, inputDataHash, resultHash, modelWeightsHash, proofTimestamp]
+      );
+
+      const signature = await this.wallet.signMessage(ethers.utils.arrayify(proofHash));
+      const resultBytes = ethers.utils.toUtf8Bytes(resultData);
       
       // Estimate gas specifically for this call
       try {
-        const gasEstimate = await this.inferenceMarket.estimateGas.submitResult(requestId, resultHash, resultData);
+        const gasEstimate = await this.inferenceMarket.estimateGas['submitResult(uint256,bytes32,bytes32,bytes,bytes32,uint256,bytes)'](
+          requestId,
+          resultHash,
+          proofHash,
+          signature,
+          modelWeightsHash,
+          proofTimestamp,
+          resultBytes
+        );
         // Add 50% buffer to the estimate
         const gasLimit = gasEstimate.mul(150).div(100);
         logger.info(`Estimated gas: ${gasEstimate.toString()}, Using gas limit: ${gasLimit.toString()}`);
@@ -372,7 +416,16 @@ class BlockchainService {
       }
       
       // Use updated gasSettings
-      const tx = await this.inferenceMarket.submitResult(requestId, resultHash, resultData, gasSettings);
+      const tx = await this.inferenceMarket['submitResult(uint256,bytes32,bytes32,bytes,bytes32,uint256,bytes)'](
+        requestId,
+        resultHash,
+        proofHash,
+        signature,
+        modelWeightsHash,
+        proofTimestamp,
+        resultBytes,
+        gasSettings
+      );
       logger.logTransaction(tx.hash, `Submit result #${requestId}`);
       
       const receipt = await tx.wait();
@@ -396,6 +449,7 @@ class BlockchainService {
         txHash: tx.hash, 
         receipt, 
         resultHash,
+        proofHash,
         paymentProcessed: !!(completedEvent && paymentEvent)
       };
     });
@@ -542,10 +596,27 @@ class BlockchainService {
    */
   async getTimeoutDuration() {
     try {
-      const timeout = await this.inferenceMarket.TIMEOUT_DURATION();
-      return timeout.toNumber(); // Returns seconds
+      const timeout = await this.inferenceMarket.COMPUTE_TIMEOUT();
+      return timeout.toNumber();
     } catch (error) {
       logger.error('Failed to get timeout duration:', error);
+      throw error;
+    }
+  }
+
+  async getTimeoutConfig() {
+    try {
+      const [pickupTimeout, computeTimeout] = await Promise.all([
+        this.inferenceMarket.REQUEST_PICKUP_TIMEOUT(),
+        this.inferenceMarket.COMPUTE_TIMEOUT()
+      ]);
+
+      return {
+        pickupTimeoutSeconds: pickupTimeout.toNumber(),
+        computeTimeoutSeconds: computeTimeout.toNumber()
+      };
+    } catch (error) {
+      logger.error('Failed to get timeout config:', error);
       throw error;
     }
   }
