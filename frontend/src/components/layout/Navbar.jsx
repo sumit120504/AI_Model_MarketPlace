@@ -42,6 +42,14 @@ function Navbar() {
             >
               Dashboard
             </Link>
+            {isConnected && (
+              <Link
+                to="/compute"
+                className="text-gray-300 hover:text-white transition-colors"
+              >
+                Compute
+              </Link>
+            )}
             {isAdmin && (
               <Link
                 to="/admin"

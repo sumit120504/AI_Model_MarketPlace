@@ -726,6 +726,64 @@ export function Web3Provider({ children }) {
       }
     },
 
+    async isAuthorizedComputeNode(address) {
+      try {
+        return await inferenceMarket.authorizedComputeNodes(address);
+      } catch (error) {
+        console.error('Error checking node authorization:', error);
+        throw error;
+      }
+    },
+
+    async getPendingRequests() {
+      try {
+        const requestIds = await inferenceMarket.getPendingRequests();
+        const requests = [];
+
+        for (const id of requestIds) {
+          const request = await contractHelpers.getRequest(id.toString());
+          requests.push(request);
+        }
+
+        return requests;
+      } catch (error) {
+        console.error('Error getting pending requests:', error);
+        throw error;
+      }
+    },
+
+    async pickupRequest(requestId) {
+      try {
+        const tx = await inferenceMarket.pickupRequest(requestId);
+        await waitForTransaction(tx, `Picking up request #${requestId}`);
+      } catch (error) {
+        console.error('Error picking up request:', error);
+        toast.error('Failed to pick up request', { id: 'pickup-request' });
+        throw error;
+      }
+    },
+
+    async getNodeEarnings(address) {
+      try {
+        const amountWei = await inferenceMarket.nodeEarnings(address);
+        return ethers.utils.formatEther(amountWei);
+      } catch (error) {
+        console.error('Error getting node earnings:', error);
+        throw error;
+      }
+    },
+
+    async withdrawNodeEarnings() {
+      try {
+        const tx = await inferenceMarket.withdrawNodeEarnings();
+        await waitForTransaction(tx, 'Withdrawing node earnings');
+      } catch (error) {
+        console.error('Error withdrawing node earnings:', error);
+        toast.error('Failed to withdraw node earnings', { id: 'withdraw-node' });
+        throw error;
+      }
+    },
+
     // Request refund for timed out/failed inference
     async requestRefund(requestId) {
       try {

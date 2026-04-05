@@ -737,6 +737,7 @@ export const MODEL_REGISTRY_ABI = [
 
 export const INFERENCE_MARKET_ABI = [
   "function requestInference(uint256 _modelId, bytes32 _inputDataHash) external payable returns (uint256)",
+	"function pickupRequest(uint256 _requestId) external",
 	"function getRequest(uint256 _requestId) external view returns (tuple(uint256 requestId, uint256 modelId, address user, uint256 payment, bytes32 inputDataHash, bytes32 resultHash, bytes32 proofHash, address computeNode, uint256 createdAt, uint256 pickedUpAt, uint256 completedAt, uint8 status))",
   "function getUserRequests(address _user) external view returns (uint256[] memory)",
   "function getPendingRequests() external view returns (uint256[] memory)",

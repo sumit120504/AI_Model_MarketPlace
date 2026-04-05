@@ -6,6 +6,7 @@ import Marketplace from './pages/Marketplace';
 import Dashboard from './pages/Dashboard';
 import ModelDetails from './pages/ModelDetails';
 import AdminPanel from './pages/AdminPanel';
+import ComputeNode from './pages/ComputeNode';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/model/:id" element={<ModelDetails />} />
             <Route path="/admin" element={<AdminPanel />} />
+            <Route path="/compute" element={<ComputeNode />} />
           </Routes>
         </main>
       </div>
