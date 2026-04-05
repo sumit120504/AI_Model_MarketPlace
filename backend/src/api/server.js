@@ -272,6 +272,97 @@ class APIServer {
         res.status(500).json({ error: error.message });
       }
     });
+
+    this.app.get('/creators/:address/earnings', async (req, res) => {
+      try {
+        const { address } = req.params;
+        const earnings = await this.blockchain.getCreatorEarnings(address);
+        res.json({ address, creatorEarnings: earnings });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/creators/earnings/withdraw', async (req, res) => {
+      try {
+        const result = await this.blockchain.withdrawCreatorEarnings();
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/models/:modelId/versions', async (req, res) => {
+      try {
+        const { modelId } = req.params;
+        const versions = await this.blockchain.getModelVersions(modelId);
+        res.json({ modelId, versions });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/admin/nodes/authorize', async (req, res) => {
+      try {
+        const { nodeAddress } = req.body;
+        if (!nodeAddress) {
+          return res.status(400).json({ error: 'nodeAddress is required' });
+        }
+        const result = await this.blockchain.authorizeComputeNode(nodeAddress);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/admin/nodes/revoke', async (req, res) => {
+      try {
+        const { nodeAddress } = req.body;
+        if (!nodeAddress) {
+          return res.status(400).json({ error: 'nodeAddress is required' });
+        }
+        const result = await this.blockchain.revokeComputeNode(nodeAddress);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/admin/token-rate', async (req, res) => {
+      try {
+        const { tokenRate } = req.body;
+        const result = await this.blockchain.setTokenRate(Number(tokenRate));
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/admin/evaluation-weights', async (req, res) => {
+      try {
+        const { accuracy, efficiency, reliability, responseTime } = req.body;
+        const result = await this.blockchain.setEvaluationWeights(
+          Number(accuracy),
+          Number(efficiency),
+          Number(reliability),
+          Number(responseTime)
+        );
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/admin/models/:modelId/evaluation-score', async (req, res) => {
+      try {
+        const { modelId } = req.params;
+        const { score } = req.body;
+        const result = await this.blockchain.setModelEvaluationScore(Number(modelId), Number(score));
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
     
     // Get model details
     this.app.get('/models/:modelId', async (req, res) => {

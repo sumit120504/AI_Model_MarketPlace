@@ -34,6 +34,10 @@ const INFERENCE_MARKET_ABI = [
   "function nodeEarnings(address) external view returns (uint256)",
   "function creatorEarnings(address) external view returns (uint256)",
   "function refundableUserBalances(address) external view returns (uint256)",
+  "function authorizeComputeNode(address _node) external",
+  "function revokeComputeNode(address _node) external",
+  "function setTokenRate(uint256 _newRate) external",
+  "function setEvaluationWeights(uint256 _accuracy, uint256 _efficiency, uint256 _reliability, uint256 _responseTime) external",
   "function withdrawNodeEarnings() external",
   "function withdrawCreatorEarnings() external",
   "function withdrawRefundableBalance() external",
@@ -60,6 +64,7 @@ const MODEL_REGISTRY_ABI = [
   "function updatePrice(uint256 _modelId, uint256 _newPrice) external",
   "function addStake(uint256 _modelId) external payable",
   "function withdrawStake(uint256 _modelId, uint256 _amount) external",
+  "function setEvaluationScore(uint256 _modelId, uint256 _score) external",
   "function recordInference(uint256 _modelId, uint256 _payment) external",
   "function penalizeModel(uint256 _modelId, uint256 _slashAmount) external",
   
@@ -735,6 +740,110 @@ class BlockchainService {
       return ethers.utils.formatEther(minStake);
     } catch (error) {
       logger.error('Failed to get minimum stake:', error);
+      throw error;
+    }
+  }
+
+  async getCreatorEarnings(creatorAddress) {
+    try {
+      const amount = await this.inferenceMarket.creatorEarnings(creatorAddress);
+      return ethers.utils.formatEther(amount);
+    } catch (error) {
+      logger.error(`Failed to get creator earnings for ${creatorAddress}:`, error);
+      throw error;
+    }
+  }
+
+  async withdrawCreatorEarnings() {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.withdrawCreatorEarnings(gasSettings);
+      logger.logTransaction(tx.hash, 'Withdraw creator earnings');
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async getRefundableBalance(userAddress) {
+    try {
+      const amount = await this.inferenceMarket.refundableUserBalances(userAddress);
+      return ethers.utils.formatEther(amount);
+    } catch (error) {
+      logger.error(`Failed to get refundable balance for ${userAddress}:`, error);
+      throw error;
+    }
+  }
+
+  async withdrawRefundableBalance() {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.withdrawRefundableBalance(gasSettings);
+      logger.logTransaction(tx.hash, 'Withdraw refundable balance');
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async authorizeComputeNode(nodeAddress) {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.authorizeComputeNode(nodeAddress, gasSettings);
+      logger.logTransaction(tx.hash, `Authorize compute node ${nodeAddress}`);
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async revokeComputeNode(nodeAddress) {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.revokeComputeNode(nodeAddress, gasSettings);
+      logger.logTransaction(tx.hash, `Revoke compute node ${nodeAddress}`);
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async setTokenRate(newRate) {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.setTokenRate(newRate, gasSettings);
+      logger.logTransaction(tx.hash, `Set token rate ${newRate}`);
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async setEvaluationWeights(accuracy, efficiency, reliability, responseTime) {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.inferenceMarket.setEvaluationWeights(
+        accuracy,
+        efficiency,
+        reliability,
+        responseTime,
+        gasSettings
+      );
+      logger.logTransaction(tx.hash, 'Set evaluation weights');
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async setModelEvaluationScore(modelId, score) {
+    return this.executeWithRetry(async (gasSettings) => {
+      const tx = await this.modelRegistry.setEvaluationScore(modelId, score, gasSettings);
+      logger.logTransaction(tx.hash, `Set model ${modelId} evaluation score ${score}`);
+      const receipt = await tx.wait();
+      return { success: true, txHash: tx.hash, receipt };
+    });
+  }
+
+  async getModelVersions(modelId) {
+    try {
+      const versions = await this.modelRegistry.getModelVersions(modelId);
+      return versions.map((v) => ({
+        version: v.version.toString(),
+        ipfsHash: v.ipfsHash,
+        provenanceHash: v.provenanceHash,
+        timestamp: new Date(Number(v.timestamp) * 1000).toISOString()
+      }));
+    } catch (error) {
+      logger.error(`Failed to get model versions for model ${modelId}:`, error);
       throw error;
     }
   }

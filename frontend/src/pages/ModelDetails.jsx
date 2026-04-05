@@ -153,13 +153,20 @@ function ModelDetails() {
         request.result = String(request.result).toUpperCase();
         if (request.result === 'HAM') request.result = 'NOT_SPAM';
       }        // Check if request is still processing and update UI accordingly
-        if (request.status === '1' || request.statusText === 'COMPUTING') {
+        const numericStatus = Number(request.status);
+
+        if (
+          numericStatus === 1 ||
+          numericStatus === 2 ||
+          request.statusText === 'COMPUTING' ||
+          request.statusText === 'VERIFYING'
+        ) {
           console.log('Request still processing...');
           // Update the status but don't extract results yet
-          setRequestStatus(request.statusText || 'COMPUTING');
+          setRequestStatus(request.statusText || (numericStatus === 2 ? 'VERIFYING' : 'COMPUTING'));
           setProgressInfo(request.progress || {
-            status: request.statusText || 'COMPUTING',
-            progress: 50 // Default to 50% while computing
+            status: request.statusText || (numericStatus === 2 ? 'VERIFYING' : 'COMPUTING'),
+            progress: numericStatus === 2 ? 80 : 50
           });
           return; // Exit early and wait for next poll
         }
@@ -179,7 +186,7 @@ function ModelDetails() {
         }
 
                   // Update status and progress with more detailed status tracking
-        const newStatus = request.statusText || (request.status === '1' ? 'COMPUTING' : 'PENDING');
+        const newStatus = request.statusText || (numericStatus === 1 ? 'COMPUTING' : (numericStatus === 2 ? 'VERIFYING' : 'PENDING'));
         setRequestStatus(newStatus);
         
         // More granular progress tracking
@@ -222,7 +229,7 @@ function ModelDetails() {
         }
 
         // Completed status (2 = COMPLETED)
-        if (request.status === '2' || request.status === 2 || request.statusText === 'COMPLETED') {
+        if (numericStatus === 3 || request.statusText === 'COMPLETED') {
           console.log('Request completed, details:', {
             status: request.statusText,
             resultData: request.resultData,
@@ -462,22 +469,11 @@ function ModelDetails() {
             metadata: resultData?.metadata || null
           });
 
-          // Show detailed result notification
-          const confidencePercent = (finalConfidence * 100).toFixed(1);
-          const otherClass = finalLabel === 'SPAM' ? 'NOT_SPAM' : 'SPAM';
-          const otherProb = probabilities?.[otherClass];
-          const otherPercent = otherProb ? (otherProb * 100).toFixed(1) : '0.0';
-          
-          toast.success(
-            `Result: ${finalLabel} (${confidencePercent}% confident)\n` +
-            `Alternative: ${otherClass} (${otherPercent}%)`, 
-            { duration: 5000 }
-          );
           return;
         }
 
         // Failed - Enhanced error handling
-        if (request.status === '3' || request.statusText === 'FAILED') {
+        if (numericStatus === 4 || request.statusText === 'FAILED') {
           clearInterval(interval);
           setPollingInterval(null);
           setProcessing(false);
@@ -493,6 +489,18 @@ function ModelDetails() {
           
           console.error('Inference failed:', errorContext);
           toast.error(errorContext, { duration: 5000 });
+          return;
+        }
+
+        if (numericStatus === 5 || request.statusText === 'REFUNDED') {
+          clearInterval(interval);
+          setPollingInterval(null);
+          setProcessing(false);
+          setProgressInfo({
+            status: 'REFUNDED',
+            progress: 100
+          });
+          toast('Request refunded due to timeout/failure.');
           return;
         }
 

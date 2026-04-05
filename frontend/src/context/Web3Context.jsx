@@ -117,16 +117,22 @@ export function Web3Provider({ children }) {
         console.log('Validating InferenceMarket contract...');
         await marketContract.deployed();
 
-        // Check if address is admin - catch errors if functions don't exist
+        // Determine admin privileges. Owner check should work even if custom isAdmin() is absent.
         try {
           console.log('Checking admin status for address:', address);
-          isAdminUser = await registryContract.isAdmin(address);
+          if (typeof registryContract.isAdmin === 'function') {
+            isAdminUser = await registryContract.isAdmin(address);
+          }
+        } catch (e) {
+          console.warn('isAdmin() check failed, falling back to owner-only admin mode:', e.message);
+        }
+
+        try {
           const ownerAddress = await registryContract.owner();
           isOwner = ownerAddress.toLowerCase() === address.toLowerCase();
           console.log('Admin check result:', { isAdminUser, isOwner });
         } catch (e) {
-          console.warn('Admin check failed (this is normal for non-admin users):', e.message);
-          // Continue without admin privileges
+          console.warn('Owner check failed:', e.message);
         }
       
         // Update contract and admin state
@@ -341,7 +347,11 @@ export function Web3Provider({ children }) {
           totalInferences: model.totalInferences.toString(),
           totalEarnings: ethers.utils.formatEther(model.totalEarnings),
           reputation: model.reputationScore.toString(),
+          evaluationScore: model.evaluationScore ? model.evaluationScore.toString() : '0',
           createdAt: new Date(model.createdAt.toNumber() * 1000),
+          updatedAt: model.updatedAt ? new Date(model.updatedAt.toNumber() * 1000) : null,
+          currentVersion: model.currentVersion ? model.currentVersion.toString() : '1',
+          currentProvenanceHash: model.currentProvenanceHash || null,
           isActive: model.isActive
         };
       } catch (error) {
@@ -493,12 +503,16 @@ export function Web3Provider({ children }) {
             payment: ethers.utils.formatEther(request.payment),
             inputDataHash: request.inputDataHash,
             resultHash: request.resultHash,
+            proofHash: request.proofHash,
             computeNode: request.computeNode,
             createdAt: new Date(request.createdAt.toNumber() * 1000),
+            pickedUpAt: request.pickedUpAt.toNumber() > 0
+              ? new Date(request.pickedUpAt.toNumber() * 1000)
+              : null,
             completedAt: request.completedAt.toNumber() > 0 
               ? new Date(request.completedAt.toNumber() * 1000) 
               : null,
-            status: request.status
+            status: Number(request.status)
           });
         }
         
@@ -520,12 +534,16 @@ export function Web3Provider({ children }) {
           payment: ethers.utils.formatEther(request.payment),
           inputDataHash: request.inputDataHash,
           resultHash: request.resultHash,
+          proofHash: request.proofHash,
           computeNode: request.computeNode,
           createdAt: new Date(request.createdAt.toNumber() * 1000),
+          pickedUpAt: request.pickedUpAt.toNumber() > 0
+            ? new Date(request.pickedUpAt.toNumber() * 1000)
+            : null,
           completedAt: request.completedAt.toNumber() > 0 
             ? new Date(request.completedAt.toNumber() * 1000) 
             : null,
-          status: request.status
+          status: Number(request.status)
         };
       } catch (error) {
         console.error('Error getting request:', error);
@@ -569,6 +587,176 @@ export function Web3Provider({ children }) {
       } catch (error) {
         console.error('Error activating model:', error);
         toast.error('Failed to activate', { id: 'activate' });
+        throw error;
+      }
+    },
+
+    // Update model CID/description and create a new provenance version
+    async updateModel(modelId, ipfsHash, description) {
+      try {
+        const tx = await modelRegistry.updateModel(modelId, ipfsHash, description);
+        await waitForTransaction(tx, 'Updating model version');
+      } catch (error) {
+        console.error('Error updating model:', error);
+        toast.error('Failed to update model', { id: 'update-model' });
+        throw error;
+      }
+    },
+
+    async addStake(modelId, amount) {
+      try {
+        const tx = await modelRegistry.addStake(modelId, {
+          value: ethers.utils.parseEther(amount.toString())
+        });
+        await waitForTransaction(tx, 'Adding stake');
+      } catch (error) {
+        console.error('Error adding stake:', error);
+        toast.error('Failed to add stake', { id: 'add-stake' });
+        throw error;
+      }
+    },
+
+    async withdrawStake(modelId, amount) {
+      try {
+        const tx = await modelRegistry.withdrawStake(
+          modelId,
+          ethers.utils.parseEther(amount.toString())
+        );
+        await waitForTransaction(tx, 'Withdrawing stake');
+      } catch (error) {
+        console.error('Error withdrawing stake:', error);
+        toast.error('Failed to withdraw stake', { id: 'withdraw-stake' });
+        throw error;
+      }
+    },
+
+    async getModelVersions(modelId) {
+      try {
+        const versions = await modelRegistry.getModelVersions(modelId);
+        return versions.map((v) => ({
+          version: Number(v.version),
+          ipfsHash: v.ipfsHash,
+          provenanceHash: v.provenanceHash,
+          timestamp: new Date(Number(v.timestamp) * 1000)
+        }));
+      } catch (error) {
+        console.error('Error getting model versions:', error);
+        throw error;
+      }
+    },
+
+    async getCreatorEarnings(address) {
+      try {
+        const amountWei = await inferenceMarket.creatorEarnings(address);
+        return ethers.utils.formatEther(amountWei);
+      } catch (error) {
+        console.error('Error getting creator earnings:', error);
+        throw error;
+      }
+    },
+
+    async withdrawCreatorEarnings() {
+      try {
+        const tx = await inferenceMarket.withdrawCreatorEarnings();
+        await waitForTransaction(tx, 'Withdrawing creator earnings');
+      } catch (error) {
+        console.error('Error withdrawing creator earnings:', error);
+        toast.error('Failed to withdraw creator earnings', { id: 'withdraw-creator' });
+        throw error;
+      }
+    },
+
+    async authorizeComputeNode(nodeAddress) {
+      try {
+        const tx = await inferenceMarket.authorizeComputeNode(nodeAddress);
+        await waitForTransaction(tx, 'Authorizing compute node');
+      } catch (error) {
+        console.error('Error authorizing node:', error);
+        toast.error('Failed to authorize node', { id: 'authorize-node' });
+        throw error;
+      }
+    },
+
+    async revokeComputeNode(nodeAddress) {
+      try {
+        const tx = await inferenceMarket.revokeComputeNode(nodeAddress);
+        await waitForTransaction(tx, 'Revoking compute node');
+      } catch (error) {
+        console.error('Error revoking node:', error);
+        toast.error('Failed to revoke node', { id: 'revoke-node' });
+        throw error;
+      }
+    },
+
+    async setTokenRate(newRate) {
+      try {
+        const tx = await inferenceMarket.setTokenRate(newRate);
+        await waitForTransaction(tx, 'Updating token rate');
+      } catch (error) {
+        console.error('Error updating token rate:', error);
+        toast.error('Failed to update token rate', { id: 'token-rate' });
+        throw error;
+      }
+    },
+
+    async setEvaluationWeights(accuracy, efficiency, reliability, responseTime) {
+      try {
+        const tx = await inferenceMarket.setEvaluationWeights(
+          accuracy,
+          efficiency,
+          reliability,
+          responseTime
+        );
+        await waitForTransaction(tx, 'Updating evaluation weights');
+      } catch (error) {
+        console.error('Error updating evaluation weights:', error);
+        toast.error('Failed to update weights', { id: 'eval-weights' });
+        throw error;
+      }
+    },
+
+    async setEvaluationScore(modelId, score) {
+      try {
+        const tx = await modelRegistry.setEvaluationScore(modelId, score);
+        await waitForTransaction(tx, 'Updating evaluation score');
+      } catch (error) {
+        console.error('Error updating evaluation score:', error);
+        toast.error('Failed to update evaluation score', { id: 'eval-score' });
+        throw error;
+      }
+    },
+
+    // Request refund for timed out/failed inference
+    async requestRefund(requestId) {
+      try {
+        const tx = await inferenceMarket.requestRefund(requestId);
+        await waitForTransaction(tx, 'Requesting refund');
+      } catch (error) {
+        console.error('Error requesting refund:', error);
+        toast.error('Failed to request refund', { id: 'request-refund' });
+        throw error;
+      }
+    },
+
+    // Get refundable balance available for current user
+    async getRefundableBalance(address) {
+      try {
+        const balanceWei = await inferenceMarket.refundableUserBalances(address);
+        return ethers.utils.formatEther(balanceWei);
+      } catch (error) {
+        console.error('Error getting refundable balance:', error);
+        throw error;
+      }
+    },
+
+    // Withdraw accumulated refundable balance
+    async withdrawRefundableBalance() {
+      try {
+        const tx = await inferenceMarket.withdrawRefundableBalance();
+        await waitForTransaction(tx, 'Withdrawing refundable balance');
+      } catch (error) {
+        console.error('Error withdrawing refundable balance:', error);
+        toast.error('Failed to withdraw refundable balance', { id: 'withdraw-refund' });
         throw error;
       }
     }

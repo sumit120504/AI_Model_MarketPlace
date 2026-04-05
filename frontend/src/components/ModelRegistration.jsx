@@ -48,7 +48,7 @@ function ModelRegistration({ isOpen, onClose }) {
   const categories = [
     { value: 0, label: 'Text Classification' },
     { value: 1, label: 'Image Classification' },
-    { value: 2, label: 'Sentiment Analysis' },
+    { value: 2, label: 'Regression' },
     { value: 3, label: 'Other' }
   ];
 

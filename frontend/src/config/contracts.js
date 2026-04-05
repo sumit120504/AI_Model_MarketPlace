@@ -474,8 +474,38 @@ export const MODEL_REGISTRY_ABI = [
 					},
 					{
 						"internalType": "uint256",
+						"name": "evaluationScore",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
 						"name": "createdAt",
 						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "updatedAt",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "currentVersion",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "lastPriceUpdate",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "deactivatedAt",
+						"type": "uint256"
+					},
+					{
+						"internalType": "bytes32",
+						"name": "currentProvenanceHash",
+						"type": "bytes32"
 					},
 					{
 						"internalType": "bool",
@@ -629,8 +659,38 @@ export const MODEL_REGISTRY_ABI = [
 			},
 			{
 				"internalType": "uint256",
+				"name": "evaluationScore",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
 				"name": "createdAt",
 				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "updatedAt",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "currentVersion",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "lastPriceUpdate",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "deactivatedAt",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "currentProvenanceHash",
+				"type": "bytes32"
 			},
 			{
 				"internalType": "bool",
@@ -666,24 +726,44 @@ export const MODEL_REGISTRY_ABI = [
 		],
 		"stateMutability": "view",
 		"type": "function"
-	}
+	},
+	"function updateModel(uint256 _modelId, string memory _newIpfsHash, string memory _newDescription) external",
+	"function getModelVersions(uint256 _modelId) external view returns (tuple(uint256 version, string ipfsHash, bytes32 provenanceHash, uint256 timestamp)[] memory)",
+	"function getCurrentProvenanceHash(uint256 _modelId) external view returns (bytes32)",
+	"function setEvaluationScore(uint256 _modelId, uint256 _score) external",
+	"function pause() external",
+	"function unpause() external"
 ];
 
 export const INFERENCE_MARKET_ABI = [
   "function requestInference(uint256 _modelId, bytes32 _inputDataHash) external payable returns (uint256)",
-  "function getRequest(uint256 _requestId) external view returns (tuple(uint256 requestId, uint256 modelId, address user, uint256 payment, bytes32 inputDataHash, bytes32 resultHash, address computeNode, uint256 createdAt, uint256 completedAt, uint8 status))",
+	"function getRequest(uint256 _requestId) external view returns (tuple(uint256 requestId, uint256 modelId, address user, uint256 payment, bytes32 inputDataHash, bytes32 resultHash, bytes32 proofHash, address computeNode, uint256 createdAt, uint256 pickedUpAt, uint256 completedAt, uint8 status))",
   "function getUserRequests(address _user) external view returns (uint256[] memory)",
   "function getPendingRequests() external view returns (uint256[] memory)",
   "function getRequestStatus(uint256 _requestId) external view returns (string memory)",
+	"function requestRefund(uint256 _requestId) external",
+	"function refundableUserBalances(address) external view returns (uint256)",
+	"function withdrawRefundableBalance() external",
+	"function creatorEarnings(address) external view returns (uint256)",
+	"function withdrawCreatorEarnings() external",
+	"function nodeEarnings(address) external view returns (uint256)",
+	"function withdrawNodeEarnings() external",
+	"function authorizedComputeNodes(address) external view returns (bool)",
+	"function authorizeComputeNode(address _node) external",
+	"function revokeComputeNode(address _node) external",
+	"function setTokenRate(uint256 _newRate) external",
+	"function setEvaluationWeights(uint256 _accuracy, uint256 _efficiency, uint256 _reliability, uint256 _responseTime) external",
+	"function pause() external",
+	"function unpause() external",
   "event InferenceRequested(uint256 indexed requestId, uint256 indexed modelId, address indexed user, bytes32 inputDataHash, uint256 payment)",
-  "event InferenceCompleted(uint256 indexed requestId, bytes32 resultHash, address computeNode)"
+	"event InferenceCompleted(uint256 indexed requestId, bytes32 resultHash, bytes32 proofHash, address indexed computeNode)"
 ];
 
 // Model categories
 export const MODEL_CATEGORIES = {
   0: "Text Classification",
   1: "Image Classification",
-  2: "Sentiment Analysis",
+	2: "Regression",
   3: "Other"
 };
 
@@ -691,10 +771,11 @@ export const MODEL_CATEGORIES = {
 export const REQUEST_STATUS = {
   0: { label: "Pending", color: "yellow" },
   1: { label: "Computing", color: "blue" },
-  2: { label: "Completed", color: "green" },
-  3: { label: "Failed", color: "red" },
-  4: { label: "Refunded", color: "gray" },
-  5: { label: "Disputed", color: "orange" }
+	2: { label: "Verifying", color: "indigo" },
+	3: { label: "Completed", color: "green" },
+	4: { label: "Failed", color: "red" },
+	5: { label: "Refunded", color: "gray" },
+	6: { label: "Disputed", color: "orange" }
 };
 
 // Helper functions

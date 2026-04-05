@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import Marketplace from './pages/Marketplace';
 import Dashboard from './pages/Dashboard';
 import ModelDetails from './pages/ModelDetails';
+import AdminPanel from './pages/AdminPanel';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
             <Route path="/marketplace" element={<Marketplace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/model/:id" element={<ModelDetails />} />
+            <Route path="/admin" element={<AdminPanel />} />
           </Routes>
         </main>
       </div>

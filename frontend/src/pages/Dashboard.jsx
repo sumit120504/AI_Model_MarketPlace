@@ -1,17 +1,35 @@
 import { useState, useEffect } from 'react';
 import { useWeb3 } from '../context/Web3Context';
-import { Loader2, History, Package, Plus } from 'lucide-react';
+import { Loader2, History, Package, Plus, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getStatusInfo } from '../config/contracts';
 import { formatDistance } from 'date-fns';
 import ModelRegistration from '../components/ModelRegistration';
 
 function Dashboard() {
-  const { account, isConnected, getUserRequests, getCreatorModels, isAdmin, modelRegistry } = useWeb3();
+  const {
+    account,
+    isConnected,
+    getUserRequests,
+    getCreatorModels,
+    getCreatorEarnings,
+    withdrawCreatorEarnings,
+    getRefundableBalance,
+    requestRefund,
+    withdrawRefundableBalance,
+    updateModelPrice,
+    deactivateModel,
+    activateModel,
+    addStake,
+    withdrawStake
+  } = useWeb3();
   
   const [requests, setRequests] = useState([]);
   const [myModels, setMyModels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [creatorEarnings, setCreatorEarnings] = useState('0');
+  const [refundableBalance, setRefundableBalance] = useState('0');
   const [activeTab, setActiveTab] = useState('requests'); // 'requests' or 'models'
   const [showModelRegistration, setShowModelRegistration] = useState(false);
 
@@ -33,12 +51,12 @@ function Dashboard() {
       // Load data in parallel
       const promises = [
         getUserRequests(account),
-        isAdmin ? modelRegistry.getAllModels().then(ids => 
-          Promise.all(ids.map(id => modelRegistry.getModel(id)))
-        ) : getCreatorModels(account)
+        getCreatorModels(account),
+        getCreatorEarnings(account),
+        getRefundableBalance(account)
       ];
       
-      const [userRequests, creatorModels] = await Promise.allSettled(promises);
+      const [userRequests, creatorModels, creatorEarningsResult, refundableBalanceResult] = await Promise.allSettled(promises);
       
       // Handle requests
       if (userRequests.status === 'fulfilled') {
@@ -55,11 +73,32 @@ function Dashboard() {
         console.error('Error loading models:', creatorModels.reason);
         toast.error('Failed to load creator models');
       }
+
+      if (creatorEarningsResult.status === 'fulfilled') {
+        setCreatorEarnings(creatorEarningsResult.value || '0');
+      }
+
+      if (refundableBalanceResult.status === 'fulfilled') {
+        setRefundableBalance(refundableBalanceResult.value || '0');
+      }
     } catch (error) {
       console.error('Error loading dashboard:', error);
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function runAction(action) {
+    try {
+      setActionLoading(true);
+      await action();
+      await loadDashboardData();
+    } catch (error) {
+      // Errors are shown by context helpers.
+      console.error(error);
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -107,6 +146,47 @@ function Dashboard() {
           <div className="text-3xl font-bold text-primary-400">
             {requests.reduce((sum, req) => sum + parseFloat(req.payment), 0).toFixed(4)} MATIC
           </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="card flex items-center justify-between">
+          <div>
+            <div className="text-gray-400 text-sm mb-1">Creator Claimable Earnings</div>
+            <div className="text-2xl font-bold text-green-400">
+              {parseFloat(creatorEarnings || '0').toFixed(4)} MATIC
+            </div>
+          </div>
+          <button
+            className="btn-primary"
+            disabled={actionLoading || parseFloat(creatorEarnings || '0') <= 0}
+            onClick={() => runAction(async () => {
+              await withdrawCreatorEarnings();
+              toast.success('Creator earnings withdrawn');
+            })}
+          >
+            <Wallet className="h-4 w-4" />
+            <span>Claim</span>
+          </button>
+        </div>
+
+        <div className="card flex items-center justify-between">
+          <div>
+            <div className="text-gray-400 text-sm mb-1">Refundable Balance</div>
+            <div className="text-2xl font-bold text-yellow-400">
+              {parseFloat(refundableBalance || '0').toFixed(4)} MATIC
+            </div>
+          </div>
+          <button
+            className="btn-secondary"
+            disabled={actionLoading || parseFloat(refundableBalance || '0') <= 0}
+            onClick={() => runAction(async () => {
+              await withdrawRefundableBalance();
+              toast.success('Refund balance withdrawn');
+            })}
+          >
+            Withdraw
+          </button>
         </div>
       </div>
 
@@ -202,6 +282,21 @@ function Dashboard() {
                             </div>
                           </div>
                         </div>
+
+                        <div className="mt-4 flex gap-2">
+                          {request.status === 0 || request.status === 1 ? (
+                            <button
+                              className="btn-secondary"
+                              disabled={actionLoading}
+                              onClick={() => runAction(async () => {
+                                await requestRefund(request.id);
+                                toast.success(`Refund requested for #${request.id}`);
+                              })}
+                            >
+                              Claim Refund
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -271,6 +366,77 @@ function Dashboard() {
                         {(parseInt(model.reputation) / 10).toFixed(1)}/100
                       </div>
                     </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+                    <button
+                      className="btn-secondary"
+                      disabled={actionLoading}
+                      onClick={() => {
+                        const nextPrice = window.prompt('Enter new price in MATIC', model.price);
+                        if (!nextPrice) return;
+                        runAction(async () => {
+                          await updateModelPrice(model.id, nextPrice);
+                          toast.success('Price updated');
+                        });
+                      }}
+                    >
+                      Update Price
+                    </button>
+
+                    <button
+                      className="btn-secondary"
+                      disabled={actionLoading}
+                      onClick={() => {
+                        const amount = window.prompt('Stake amount to add (MATIC)', '0.01');
+                        if (!amount) return;
+                        runAction(async () => {
+                          await addStake(model.id, amount);
+                          toast.success('Stake added');
+                        });
+                      }}
+                    >
+                      Add Stake
+                    </button>
+
+                    <button
+                      className="btn-secondary"
+                      disabled={actionLoading}
+                      onClick={() => {
+                        const amount = window.prompt('Stake amount to withdraw (MATIC)', '0.01');
+                        if (!amount) return;
+                        runAction(async () => {
+                          await withdrawStake(model.id, amount);
+                          toast.success('Stake withdrawn');
+                        });
+                      }}
+                    >
+                      Withdraw Stake
+                    </button>
+
+                    {model.isActive ? (
+                      <button
+                        className="btn-secondary"
+                        disabled={actionLoading}
+                        onClick={() => runAction(async () => {
+                          await deactivateModel(model.id);
+                          toast.success('Model deactivated');
+                        })}
+                      >
+                        Deactivate
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        disabled={actionLoading}
+                        onClick={() => runAction(async () => {
+                          await activateModel(model.id);
+                          toast.success('Model activated');
+                        })}
+                      >
+                        Activate
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

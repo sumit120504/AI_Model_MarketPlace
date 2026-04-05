@@ -3,7 +3,7 @@ import { useWeb3 } from '../../context/Web3Context';
 import { Wallet, LogOut, Activity } from 'lucide-react';
 
 function Navbar() {
-  const { account, isConnected, balance, connectWallet, disconnectWallet } = useWeb3();
+  const { account, isConnected, isAdmin, balance, connectWallet, disconnectWallet } = useWeb3();
 
   const formatAddress = (address) => {
     if (!address) return '';
@@ -42,6 +42,14 @@ function Navbar() {
             >
               Dashboard
             </Link>
+            {isAdmin && (
+              <Link
+                to="/admin"
+                className="text-gray-300 hover:text-white transition-colors"
+              >
+                Admin
+              </Link>
+            )}
           </div>
 
           {/* Wallet Connection */}
