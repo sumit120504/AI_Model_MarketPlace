@@ -8,7 +8,7 @@ function Home() {
   const features = [
     {
       icon: Sparkles,
-      title: 'Decentralized AI',
+      title: 'Nexus Ecosystem',
       description: 'Run AI models on blockchain with cryptographic proof'
     },
     {
@@ -38,9 +38,9 @@ function Home() {
             Trusted AI Inference on Chain
           </div>
           <h1 className="text-5xl md:text-7xl font-bold leading-[1.05]">
-            <span className="gradient-text">Decentralized AI</span>
+            <span className="gradient-text">Nexus</span>
             <br />
-            Marketplace
+            Decentralized AI Models Marketplace
           </h1>
           <p className="text-lg md:text-xl text-slate-300 max-w-2xl">
             Monetize creator-built models, run verifiable inference, and keep every decision auditable with blockchain-native execution flows.

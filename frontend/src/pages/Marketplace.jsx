@@ -105,7 +105,7 @@ function Marketplace() {
               <Sparkles className="h-3.5 w-3.5" />
               On-chain Model Discovery
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold mb-2">AI Model Marketplace</h1>
+            <h1 className="text-3xl md:text-4xl font-bold mb-2">Nexus - Decentralized AI Models Marketplace</h1>
             <p className="text-slate-300">
               Discover creator-owned models for text and image intelligence workflows.
             </p>

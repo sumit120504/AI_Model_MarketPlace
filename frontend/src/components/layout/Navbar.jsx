@@ -20,7 +20,7 @@ function Navbar() {
               <Activity className="h-5 w-5 text-cyan-300" />
             </div>
             <span className="text-xl font-bold gradient-text">
-              AI Marketplace
+              Nexus
             </span>
           </Link>
 
