@@ -17,18 +17,19 @@ class ModelRunner {
     this.modelInfo = null;
     this.pythonScript = path.join(__dirname, 'run_model.py');
     
-    // Use absolute path to Python executable
-    const projectRoot = path.resolve(process.cwd(), '..');
-    this.pythonPath = process.env.PYTHON_PATH || path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
+    // Use the backend directory as the base so the venv resolves to backend/.venv
+    const backendRoot = path.resolve(__dirname, '../..');
+    const isWindows = process.platform === 'win32';
     
-    // Convert to proper Windows path format
-    this.pythonPath = this.pythonPath.replace(/\//g, '\\');
+    if (process.env.PYTHON_PATH) {
+      this.pythonPath = process.env.PYTHON_PATH;
+    } else if (isWindows) {
+      this.pythonPath = path.join(backendRoot, '.venv', 'Scripts', 'python.exe');
+    } else {
+      this.pythonPath = path.join(backendRoot, '.venv', 'bin', 'python');
+    }
 
-    // Set PYTHONPATH to include the virtualenv site-packages
-    process.env.PYTHONPATH = path.join(projectRoot, '.venv', 'Lib', 'site-packages');
-    
     logger.info('Model Runner initialized with Python path:', this.pythonPath);
-    logger.info('PYTHONPATH set to:', process.env.PYTHONPATH);
   }
 
   /**
@@ -55,21 +56,39 @@ class ModelRunner {
       throw new Error('Python path is not set');
     }
 
-    try {
-      // First verify Python path exists
-      logger.info('Checking Python executable at:', this.pythonPath);
-      await fs.access(this.pythonPath);
-    } catch (error) {
-      logger.error('Python path access error:', error);
-      throw new Error(`Python executable not found at ${this.pythonPath}. Please check your Python environment setup.`);
+    // Try multiple Python paths as fallback
+    const fallbackPaths = process.platform === 'win32' 
+      ? ['python.exe', 'python3.exe', 'python']
+      : ['/usr/bin/python3', '/usr/bin/python', '/usr/local/bin/python3', 'python3', 'python'];
+    
+    let workingPythonPath = this.pythonPath;
+    
+    // Try to find a working Python if venv not found
+    if (!await this.pythonExists(this.pythonPath)) {
+      logger.warn(`Could not access configured Python at: ${this.pythonPath}`);
+      logger.info('Trying fallback Python paths...');
+      
+      for (const fallback of fallbackPaths) {
+        if (await this.pythonExists(fallback)) {
+          workingPythonPath = fallback;
+          logger.info(`✅ Found Python at fallback location: ${fallback}`);
+          this.pythonPath = fallback;
+          break;
+        }
+      }
+      
+      // If still no Python found, throw error
+      if (workingPythonPath === this.pythonPath && !await this.pythonExists(this.pythonPath)) {
+        throw new Error(`Could not find Python executable. Tried: ${this.pythonPath}, ${fallbackPaths.join(', ')}`);
+      }
     }
 
-    // Test Python version first
+    // Test Python version
     return new Promise((resolve, reject) => {
       try {
-        logger.info('Verifying Python version at path:', this.pythonPath);
+        logger.info('Verifying Python version at path:', workingPythonPath);
         const versionCheck = new PythonShell('-c', {
-          pythonPath: this.pythonPath,
+          pythonPath: workingPythonPath,
           mode: 'text',
           args: ['import sys; print(sys.version)']
         });
@@ -85,7 +104,7 @@ class ModelRunner {
         versionCheck.end((err) => {
           if (err) {
             logger.error('Python version check failed:', err);
-            reject(new Error(`Failed to execute Python: ${err.message}`));
+            reject(new Error(`Failed to execute Python at ${workingPythonPath}: ${err.message}`));
             return;
           }
 
@@ -137,6 +156,21 @@ class ModelRunner {
         reject(err);
       }
     });
+  }
+
+  /**
+   * Set the path to the downloaded model file and load model info
+   */
+  /**
+   * Check if a Python executable exists and is accessible
+   */
+  async pythonExists(pythonPath) {
+    try {
+      await fs.access(pythonPath);
+      return true;
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
@@ -434,6 +468,8 @@ class ModelRunner {
     };
   }
 }
+    
+
 
 // Singleton instance
 let modelRunnerInstance = null;
