@@ -258,6 +258,38 @@ def _read_input_size(model_metadata: Dict[str, Any], model_config: Dict[str, Any
     return None
 
 
+def _infer_hw_from_onnx_shape(input_shape: List[Any]) -> Optional[Tuple[int, int]]:
+    # Handles common image layouts: NCHW and NHWC where H/W are static ints.
+    if not isinstance(input_shape, list) or len(input_shape) < 4:
+        return None
+
+    dims: List[Optional[int]] = []
+    for dim in input_shape:
+        if isinstance(dim, int):
+            dims.append(dim)
+        else:
+            dims.append(None)
+
+    # NCHW: [N, C, H, W]
+    if dims[1] in (1, 3):
+        h, w = dims[2], dims[3]
+        if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+            return h, w
+
+    # NHWC: [N, H, W, C]
+    if dims[3] in (1, 3):
+        h, w = dims[1], dims[2]
+        if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+            return h, w
+
+    # Fallback: for 4D tensors, last two dims are often H/W.
+    h, w = dims[-2], dims[-1]
+    if isinstance(h, int) and isinstance(w, int) and h > 0 and w > 0:
+        return h, w
+
+    return None
+
+
 def _prepare_onnx_image_input(
     raw_input: Any,
     input_shape: List[Any],
@@ -274,8 +306,10 @@ def _prepare_onnx_image_input(
         raise ValueError("Image preprocessing failed: expected numpy array")
 
     target = _read_input_size(model_metadata, model_config)
+    if target is None:
+        target = _infer_hw_from_onnx_shape(input_shape)
     if target and cv2 is not None:
-        image = cv2.resize(image, (int(target[0]), int(target[1])))
+        image = cv2.resize(image, (int(target[1]), int(target[0])))
 
     # Infer channel ordering from ONNX input shape if possible.
     # Typical expected input shape: [N, C, H, W] or [N, H, W, C].
