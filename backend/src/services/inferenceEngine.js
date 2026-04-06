@@ -85,6 +85,7 @@ class InferenceEngine {
   
   async handleNewRequest(request) {
     const { requestId } = request;
+      let failureReported = false;
     
     // Atomic check-and-set to prevent race conditions
     if (this.processing.has(requestId)) {
@@ -274,24 +275,27 @@ class InferenceEngine {
       // Step 4: Get input data from IPFS
       updateStatus('inputData', 'started');
       try {
-        const inputText = await this.getInputData(requestDetails.inputDataHash);
-        if (!inputText) {
+        const inputData = await this.getInputData(requestDetails.inputDataHash);
+        if (inputData === undefined || inputData === null) {
           throw new Error('Retrieved input data is empty');
         }
         updateStatus('inputData', 'completed');
         
         // Step 5: Run AI inference
         updateStatus('inference', 'started');
-        logger.info(`[Request #${requestId}] Starting inference with input length: ${inputText.length} chars`);
+        const inputPreview = typeof inputData === 'string'
+          ? `${inputData.substring(0, 50)}${inputData.length > 50 ? '...' : ''}`
+          : JSON.stringify(inputData).substring(0, 120);
+        logger.info(`[Request #${requestId}] Starting inference with input type: ${typeof inputData}`);
         
         // Validate input before inference
-        if (!inputText || typeof inputText !== 'string') {
-          throw new Error(`Invalid input data type: ${typeof inputText}`);
+        if ((typeof inputData !== 'string' && typeof inputData !== 'object') || inputData === '') {
+          throw new Error(`Invalid input data type: ${typeof inputData}`);
         }
 
-        logger.info(`Running inference with input: "${inputText.substring(0, 50)}${inputText.length > 50 ? '...' : ''}"`);
+        logger.info(`Running inference with input: "${inputPreview}"`);
         
-        const result = await this.modelRunner.runInference(inputText);
+        const result = await this.modelRunner.runInference(inputData);
         
         if (!result) {
           updateStatus('inference', 'failed');
@@ -409,7 +413,10 @@ class InferenceEngine {
         // Report failure to blockchain (this will trigger refund)
         try {
           const truncatedError = errorMsg.substring(0, 100);
-          await this.blockchain.reportFailure(requestId, truncatedError);
+          const failureResult = await this.blockchain.reportFailure(requestId, truncatedError);
+          if (failureResult?.success || failureResult?.skipped) {
+            failureReported = true;
+          }
           logger.info(`[Request #${requestId}] Failure reported and refund initiated`);
         } catch (reportError) {
           logger.error(`[Request #${requestId}] Failed to report failure:`, reportError);
@@ -425,11 +432,13 @@ class InferenceEngine {
       logger.error(`[Request #${requestId}] Processing failed:`, error);
       
       // Report failure if not already reported
-      try {
-        await this.blockchain.reportFailure(requestId, error.message.substring(0, 100));
-        logger.info(`[Request #${requestId}] Failure reported, user can request refund`);
-      } catch (reportError) {
-        logger.error(`[Request #${requestId}] Failed to report failure:`, reportError);
+      if (!failureReported) {
+        try {
+          await this.blockchain.reportFailure(requestId, error.message.substring(0, 100));
+          logger.info(`[Request #${requestId}] Failure reported, user can request refund`);
+        } catch (reportError) {
+          logger.error(`[Request #${requestId}] Failed to report failure:`, reportError);
+        }
       }
       
       this.stats.failed++;
@@ -512,7 +521,11 @@ class InferenceEngine {
       if (content) {
         // Save content and cache it
         await fs.promises.writeFile(tempInputPath, content);
-        inputData = content;
+        try {
+          inputData = JSON.parse(content);
+        } catch {
+          inputData = content;
+        }
         
         // Cache under both keys
         this.cache.set(inputDataHash, content);

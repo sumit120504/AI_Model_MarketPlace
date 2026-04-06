@@ -180,18 +180,21 @@ class ModelRunner {
     this.modelPath = modelPath;
     this.modelInfo = modelInfo;
     logger.info(`Model path set to: ${modelPath}`);
-    
-    // Check if this is a spam detection model
-    const isSpamModel = modelInfo?.type === 'text_classification' || 
-                       modelPath.includes('spam_detector') ||
-                       modelInfo?.name?.toLowerCase().includes('spam');
-    
-    if (isSpamModel) {
+
+    // Default behavior is generic model execution.
+    // Specialized spam runner can be explicitly enabled for backward compatibility.
+    const enableSpecializedSpamRunner = process.env.ENABLE_SPAM_SPECIALIZED_RUNNER === 'true';
+    const modelCategory = modelInfo?.category?.name || modelInfo?.type || '';
+    const isSpamNamedModel = modelPath.includes('spam_detector') || modelInfo?.name?.toLowerCase().includes('spam');
+
+    if (enableSpecializedSpamRunner && modelCategory === 'TEXT_CLASSIFICATION' && isSpamNamedModel) {
       logger.info('Using specialized spam detection model runner');
       this.spamRunner = getSpamModelRunner();
       await this.spamRunner.setModelPath(modelPath);
       return;
     }
+
+    this.spamRunner = null;
     
     // Verify model file exists
     try {
@@ -242,9 +245,10 @@ class ModelRunner {
         tempInputFile = path.join(process.cwd(), 'models', `temp_input_${Date.now()}.json`);
         
         // Prepare model input configuration
+        const categoryName = this.modelInfo?.category?.name || this.modelInfo?.type || 'TEXT_CLASSIFICATION';
         const modelConfig = {
           input: inputData,
-          modelType: this.modelInfo?.type || 'text_classification',
+          modelType: String(categoryName).toLowerCase(),
           modelConfig: this.modelInfo?.config || {}
         };
         

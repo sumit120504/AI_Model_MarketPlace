@@ -162,8 +162,14 @@ class SpamModelRunner {
       });
 
       pyshell.on('stderr', (err) => {
-        errorOutput.push(err);
-        logger.error('Python error:', err);
+        const text = String(err || '');
+        const isVersionWarning = text.includes('InconsistentVersionWarning') || text.includes('warnings.warn(');
+        if (isVersionWarning) {
+          logger.warn('Python warning:', text);
+          return;
+        }
+        errorOutput.push(text);
+        logger.error('Python error:', text);
       });
 
       pyshell.on('error', (err) => {
