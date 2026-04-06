@@ -459,8 +459,12 @@ function ModelDetails() {
             finalLabel = resultData.label;
             finalConfidence = resultData.confidence ?? null;
           } else if (typeof resultData.prediction === 'number') {
-            // Some models return numeric prediction indices (0/1)
-            finalLabel = resultData.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            // Keep numeric index for generic models; map only legacy spam outputs.
+            if (!isImageModel) {
+              finalLabel = resultData.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            } else {
+              finalLabel = String(resultData.prediction);
+            }
             finalConfidence = resultData.probabilities?.[String(resultData.prediction)] ?? resultData.confidence ?? null;
           } else {
             const fromProbs = extractFromProbabilities(resultData.metadata?.probabilities || resultData.probabilities);
@@ -470,10 +474,12 @@ function ModelDetails() {
             }
           }
 
-          // Normalize label to uppercase common tokens used by UI
+          // Normalize only legacy spam tokens; keep image labels as provided.
           if (finalLabel && typeof finalLabel === 'string') {
-            finalLabel = finalLabel.toUpperCase();
-            if (finalLabel === 'HAM') finalLabel = 'NOT_SPAM';
+            if (!isImageModel) {
+              finalLabel = finalLabel.toUpperCase();
+              if (finalLabel === 'HAM') finalLabel = 'NOT_SPAM';
+            }
           }
 
           // Debug: show what will be set
@@ -753,9 +759,19 @@ function ModelDetails() {
         {/* Result Display */}
         {result && (
           <div className="mt-6 p-6 bg-gray-900 rounded-lg border-2 border-primary-500 animate-fadeIn">
+            {(() => {
+              const probsObj = result.metadata?.probabilities || {};
+              const sortedProbs = Object.entries(probsObj)
+                .filter(([, v]) => typeof v === 'number' && !Number.isNaN(v))
+                .sort((a, b) => b[1] - a[1]);
+              const topTwo = sortedProbs.slice(0, 2);
+              const isSpamResult = !isImageModel && String(result.result).toUpperCase() === 'SPAM';
+
+              return (
+                <>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold">Result</h3>
-              {result.result === 'SPAM' ? (
+              {isSpamResult ? (
                 <XCircle className="h-6 w-6 text-red-500" />
               ) : (
                 <CheckCircle className="h-6 w-6 text-green-500" />
@@ -766,7 +782,7 @@ function ModelDetails() {
               <div>
                 <div className="text-gray-400 text-sm">Classification</div>
                 <div className={`text-2xl font-bold ${
-                  result.result === 'SPAM' ? 'text-red-400' : 'text-green-400'
+                  isSpamResult ? 'text-red-400' : 'text-green-400'
                 }`}>
                   {result.result}
                 </div>
@@ -779,17 +795,15 @@ function ModelDetails() {
                     <span className="text-xl font-semibold">
                       {(result.confidence * 100).toFixed(1)}%
                     </span>
-                    <span className={result.result === 'SPAM' ? 'text-red-400' : 'text-green-400'}>
+                    <span className={isSpamResult ? 'text-red-400' : 'text-green-400'}>
                       {result.result}
                     </span>
                   </div>
                   
-                  {result.metadata?.probabilities && (
+                  {topTwo.length > 1 && (
                     <div className="flex justify-between items-center text-sm">
-                      <span>{((1 - result.confidence) * 100).toFixed(1)}%</span>
-                      <span className="text-gray-400">
-                        {result.result === 'SPAM' ? 'NOT_SPAM' : 'SPAM'}
-                      </span>
+                      <span>{(topTwo[1][1] * 100).toFixed(1)}%</span>
+                      <span className="text-gray-400">{topTwo[1][0]}</span>
                     </div>
                   )}
                   
@@ -797,7 +811,7 @@ function ModelDetails() {
                   <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
                     <div 
                       className={`h-full ${
-                        result.result === 'SPAM' ? 'bg-red-400' : 'bg-green-400'
+                        isSpamResult ? 'bg-red-400' : 'bg-green-400'
                       }`}
                       style={{ width: `${result.confidence * 100}%` }}
                     />
@@ -812,6 +826,9 @@ function ModelDetails() {
                 </div>
               </div>
             </div>
+                </>
+              );
+            })()}
           </div>
         )}
       </div>

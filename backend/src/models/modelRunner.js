@@ -375,6 +375,17 @@ class ModelRunner {
       // Log raw results for debugging
       logger.debug('Raw results from Python:', results);
       
+      const normalizedModelType = String(this.resolveModelType() || '').toLowerCase();
+      const isTextModel = normalizedModelType.includes('text');
+
+      const normalizeLegacyTextLabel = (value) => {
+        const raw = String(value ?? '');
+        if (!isTextModel) return raw;
+        const upper = raw.toUpperCase();
+        if (upper === 'HAM') return 'NOT_SPAM';
+        return upper;
+      };
+
       // Normalize results to standard schema
       let processedResults = {
         success: true,
@@ -386,8 +397,7 @@ class ModelRunner {
       // First, try to extract result from standard format
       if (results.result !== undefined && results.result !== null) {
         logger.debug('Found standard result format:', results);
-        processedResults.result = String(results.result).toUpperCase();
-        if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
+        processedResults.result = normalizeLegacyTextLabel(results.result);
         processedResults.confidence = typeof results.confidence === 'number' ? results.confidence : 1.0;
         processedResults.metadata = results.metadata || {};
       }
@@ -399,8 +409,7 @@ class ModelRunner {
         // Direct format from our spam detector
         if (output.label !== undefined && output.label !== null && output.probabilities) {
           logger.debug('Found standard spam detector output format');
-          processedResults.result = String(output.label).toUpperCase();
-          if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
+          processedResults.result = normalizeLegacyTextLabel(output.label);
           processedResults.confidence = typeof output.confidence === 'number' ? output.confidence : 1.0;
           processedResults.metadata.probabilities = output.probabilities;
           logger.debug('Processed output:', processedResults);
@@ -408,19 +417,21 @@ class ModelRunner {
         // Handle alternative formats
         else if (typeof output === 'object') {
           if ('prediction' in output) {
-            processedResults.result = output.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            if (isTextModel) {
+              processedResults.result = output.prediction === 1 ? 'SPAM' : 'NOT_SPAM';
+            } else {
+              processedResults.result = String(output.prediction);
+            }
             processedResults.confidence = output.probabilities?.[output.prediction] || 1.0;
             if (output.probabilities) {
               processedResults.metadata.probabilities = output.probabilities;
             }
           } else if (output.label) {
-            processedResults.result = String(output.label).toUpperCase();
-            if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
+            processedResults.result = normalizeLegacyTextLabel(output.label);
             processedResults.confidence = output.confidence || 1.0;
           }
         } else if (typeof output === 'string') {
-          processedResults.result = String(output).toUpperCase();
-          if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
+          processedResults.result = normalizeLegacyTextLabel(output);
           processedResults.confidence = 1.0;
         }
       }

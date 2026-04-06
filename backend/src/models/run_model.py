@@ -222,16 +222,60 @@ def _extract_label_list(model_metadata: Dict[str, Any], model_config: Dict[str, 
     candidates = []
     if isinstance(model_config, dict):
         candidates.append(model_config.get("labels"))
+        candidates.append(model_config.get("classes"))
+        candidates.append(model_config.get("class_names"))
+        candidates.append(model_config.get("label_map"))
+        candidates.append(model_config.get("idx_to_label"))
     if isinstance(model_metadata, dict):
         candidates.append(model_metadata.get("labels"))
+        candidates.append(model_metadata.get("classes"))
         cfg = model_metadata.get("config")
         if isinstance(cfg, dict):
             candidates.append(cfg.get("labels"))
+            candidates.append(cfg.get("classes"))
+            candidates.append(cfg.get("class_names"))
+            candidates.append(cfg.get("label_map"))
+            candidates.append(cfg.get("idx_to_label"))
         candidates.append(model_metadata.get("class_names"))
+        candidates.append(model_metadata.get("label_map"))
+        candidates.append(model_metadata.get("idx_to_label"))
+
+    def _from_mapping(item: Any) -> List[str]:
+        if not isinstance(item, dict) or not item:
+            return []
+
+        normalized = []
+        for key, value in item.items():
+            try:
+                idx = int(key)
+            except Exception:
+                try:
+                    idx = int(value)
+                    value = key
+                except Exception:
+                    continue
+            normalized.append((idx, str(value)))
+
+        if not normalized:
+            return []
+
+        normalized.sort(key=lambda pair: pair[0])
+        max_idx = normalized[-1][0]
+        if max_idx < 0:
+            return []
+
+        labels = [str(i) for i in range(max_idx + 1)]
+        for idx, value in normalized:
+            if idx >= 0:
+                labels[idx] = value
+        return labels
 
     for item in candidates:
         if isinstance(item, list) and item:
             return [str(x) for x in item]
+        mapped = _from_mapping(item)
+        if mapped:
+            return mapped
     return []
 
 
