@@ -15,12 +15,15 @@ class SpamModelRunner {
     this.modelPath = null;
     this.pythonScript = path.join(__dirname, 'run_model.py');
     
-    // Use absolute path to Python executable
-    const projectRoot = path.resolve(process.cwd(), '..');
-    this.pythonPath = process.env.PYTHON_PATH || path.join(projectRoot, '.venv', 'Scripts', 'python.exe');
-    this.pythonPath = this.pythonPath.replace(/\//g, '\\');
+    // Use absolute, cross-platform Python executable path
+    const backendRoot = path.resolve(__dirname, '..', '..');
+    const isWindows = process.platform === 'win32';
+    this.pythonPath = process.env.PYTHON_PATH
+      || (isWindows
+        ? path.join(backendRoot, '.venv', 'Scripts', 'python.exe')
+        : path.join(backendRoot, '.venv', 'bin', 'python'));
     
-    logger.info('Spam Model Runner initialized');
+    logger.info(`Spam Model Runner initialized with Python path: ${this.pythonPath}`);
   }
 
   /**

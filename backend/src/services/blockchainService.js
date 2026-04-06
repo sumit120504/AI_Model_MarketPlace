@@ -464,35 +464,39 @@ class BlockchainService {
    * Report failed inference
    */
   async reportFailure(requestId, reason) {
-    return this.executeWithRetry(async (gasSettings) => {
-      logger.info(`Reporting failure for request #${requestId}...`);
-      
-      try {
-        // Get request details first
-        const request = await this.inferenceMarket.getRequest(requestId);
-        const [status, details] = await Promise.all([
-          request,
-          this.inferenceMarket.getRequestStatus(requestId)
-        ]);
+    logger.info(`Reporting failure for request #${requestId}...`);
 
-        // Log current request state
-        logger.info(`Request #${requestId} current state:`, {
-          status: status.status,
-          statusText: details,
-          computeNode: status.computeNode
-        });
-        
-        // Only allow failure reporting if request is in COMPUTING state AND assigned to this node
-        if (!request || request.status !== 1) { // 1 = COMPUTING
-          logger.warn(`Cannot report failure for request #${requestId} - Invalid state: ${details}`);
-          throw new Error(`Invalid request state for failure reporting: ${details}`);
-        }
-        
-        if (request.computeNode.toLowerCase() !== this.wallet.address.toLowerCase()) {
-          logger.warn(`Cannot report failure for request #${requestId} - Not assigned to this node`);
-          throw new Error('Request not assigned to this compute node');
-        }
-        
+    // Validate current state once before entering retry wrapper.
+    // Non-retriable conditions should return early to avoid retry storms.
+    const request = await this.inferenceMarket.getRequest(requestId);
+    const details = await this.inferenceMarket.getRequestStatus(requestId);
+
+    logger.info(`Request #${requestId} current state:`, {
+      status: request?.status,
+      statusText: details,
+      computeNode: request?.computeNode
+    });
+
+    if (!request || request.status !== 1) { // 1 = COMPUTING
+      logger.warn(`Skipping failure report for request #${requestId} - Invalid state: ${details}`);
+      return {
+        success: false,
+        skipped: true,
+        reason: `Invalid request state: ${details}`
+      };
+    }
+
+    if (request.computeNode.toLowerCase() !== this.wallet.address.toLowerCase()) {
+      logger.warn(`Skipping failure report for request #${requestId} - Not assigned to this node`);
+      return {
+        success: false,
+        skipped: true,
+        reason: 'Request not assigned to this compute node'
+      };
+    }
+
+    return this.executeWithRetry(async (gasSettings) => {
+      try {
         // Use gasSettings provided by executeWithRetry
         const tx = await this.inferenceMarket.reportFailure(requestId, reason, gasSettings);
         logger.logTransaction(tx.hash, `Report failure for request #${requestId}`);

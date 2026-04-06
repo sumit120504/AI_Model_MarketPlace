@@ -6,6 +6,21 @@ import { ethers } from 'ethers';
 import toast from 'react-hot-toast';
 import { getCategoryName } from '../config/contracts';
 
+function normalizeModel(model) {
+  return {
+    id: model.modelId.toString(),
+    creator: model.creator,
+    ipfsHash: model.ipfsHash,
+    name: model.name,
+    description: model.description,
+    category: model.category,
+    price: ethers.utils.formatEther(model.pricePerInference),
+    totalInferences: model.totalInferences.toString(),
+    reputation: model.reputationScore.toString(),
+    isActive: model.isActive,
+  };
+}
+
 function Marketplace() {
   const { 
     isConnected, 
@@ -33,35 +48,29 @@ function Marketplace() {
       setError('Contract not initialized. Please check your connection and try again.');
       setLoading(false);
     }
-  }, [isConnected, isCorrectNetwork, modelRegistry]);
+  }, [isConnected, isCorrectNetwork, modelRegistry, isAdmin, showInactive]);
 
   async function loadModels() {
     try {
       setLoading(true);
-      let loadedModels;
-      if (isAdmin) {
-        // Admin can see all models
-        const modelIds = await modelRegistry.getAllModels();
-        loadedModels = await Promise.all(modelIds.map(id => modelRegistry.getModel(id)));
-        loadedModels = loadedModels.map(model => ({
-          id: model.modelId.toString(),
-          creator: model.creator,
-          ipfsHash: model.ipfsHash,
-          name: model.name,
-          description: model.description,
-          category: model.category,
-          price: ethers.utils.formatEther(model.pricePerInference),
-          totalInferences: model.totalInferences.toString(),
-          reputation: model.reputationScore.toString(),
-          isActive: model.isActive
-        }));
+
+      let loadedModels = [];
+      if (isAdmin && showInactive) {
+        const totalModels = await modelRegistry.getTotalModels();
+        const total = Number(totalModels.toString());
+
+        const allModels = await Promise.all(
+          Array.from({ length: total }, (_, index) => modelRegistry.getModel(index + 1))
+        );
+        loadedModels = allModels.map(normalizeModel);
       } else {
-        // Regular users only see active models
         loadedModels = await getActiveModels();
       }
+
       setModels(loadedModels);
     } catch (error) {
       console.error('Error loading models:', error);
+      setError(error?.reason || error?.message || 'Failed to load models');
       toast.error('Failed to load models');
     } finally {
       setLoading(false);
@@ -70,7 +79,7 @@ function Marketplace() {
 
   const filteredModels = models
     .filter(model => 
-      (showInactive || model.isActive || isAdmin) && // Show inactive models only to admin when toggled
+      (showInactive || model.isActive) &&
       (model.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
        model.description.toLowerCase().includes(searchTerm.toLowerCase()))
     );
@@ -125,6 +134,10 @@ function Marketplace() {
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-primary-500" />
+        </div>
+      ) : error ? (
+        <div className="text-center py-20">
+          <p className="text-red-400 text-lg">{error}</p>
         </div>
       ) : filteredModels.length === 0 ? (
         <div className="text-center py-20">
