@@ -240,6 +240,7 @@ class ModelRunner {
       };
 
       let tempInputFile = null;
+      let results;
       try {
         // Create temp input file with unique name to avoid conflicts
         tempInputFile = path.join(process.cwd(), 'models', `temp_input_${Date.now()}.json`);
@@ -261,7 +262,7 @@ class ModelRunner {
           pythonPath: this.pythonPath
         });
 
-    const results = await new Promise((resolve, reject) => {
+      results = await new Promise((resolve, reject) => {
       // Create Python shell with error handling
       const pyshell = new PythonShell('run_model.py', options);
       let modelOutput = [];
@@ -326,8 +327,6 @@ class ModelRunner {
           });
         });
 
-        return results;
-
       } catch (error) {
         logger.error('Model execution error:', error);
         throw new Error(`Model execution failed: ${error.message}`);
@@ -360,11 +359,11 @@ class ModelRunner {
       };
 
       // First, try to extract result from standard format
-      if (results.result !== undefined) {
+      if (results.result !== undefined && results.result !== null) {
         logger.debug('Found standard result format:', results);
         processedResults.result = String(results.result).toUpperCase();
         if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
-        processedResults.confidence = results.confidence;
+        processedResults.confidence = typeof results.confidence === 'number' ? results.confidence : 1.0;
         processedResults.metadata = results.metadata || {};
       }
       // Then try output format
@@ -373,11 +372,11 @@ class ModelRunner {
         
         const output = results.output;
         // Direct format from our spam detector
-        if (output.label && output.confidence && output.probabilities) {
+        if (output.label !== undefined && output.label !== null && output.probabilities) {
           logger.debug('Found standard spam detector output format');
           processedResults.result = String(output.label).toUpperCase();
           if (processedResults.result === 'HAM') processedResults.result = 'NOT_SPAM';
-          processedResults.confidence = output.confidence;
+          processedResults.confidence = typeof output.confidence === 'number' ? output.confidence : 1.0;
           processedResults.metadata.probabilities = output.probabilities;
           logger.debug('Processed output:', processedResults);
         }
