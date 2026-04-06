@@ -32,6 +32,27 @@ class ModelRunner {
     logger.info('Model Runner initialized with Python path:', this.pythonPath);
   }
 
+  resolveModelType() {
+    const rawCategory = this.modelInfo?.category;
+    const categoryName = this.modelInfo?.category?.name || this.modelInfo?.type;
+
+    if (categoryName) {
+      return String(categoryName).toLowerCase();
+    }
+
+    const numeric = Number(rawCategory);
+    switch (numeric) {
+      case 0:
+        return 'text_classification';
+      case 1:
+        return 'image_classification';
+      case 2:
+        return 'regression';
+      default:
+        return 'other';
+    }
+  }
+
   /**
    * Initialize the model runner
    */
@@ -184,10 +205,10 @@ class ModelRunner {
     // Default behavior is generic model execution.
     // Specialized spam runner can be explicitly enabled for backward compatibility.
     const enableSpecializedSpamRunner = process.env.ENABLE_SPAM_SPECIALIZED_RUNNER === 'true';
-    const modelCategory = modelInfo?.category?.name || modelInfo?.type || '';
+    const modelCategory = this.resolveModelType().toUpperCase();
     const isSpamNamedModel = modelPath.includes('spam_detector') || modelInfo?.name?.toLowerCase().includes('spam');
 
-    if (enableSpecializedSpamRunner && modelCategory === 'TEXT_CLASSIFICATION' && isSpamNamedModel) {
+    if (enableSpecializedSpamRunner && modelCategory.includes('TEXT') && isSpamNamedModel) {
       logger.info('Using specialized spam detection model runner');
       this.spamRunner = getSpamModelRunner();
       await this.spamRunner.setModelPath(modelPath);
@@ -246,19 +267,23 @@ class ModelRunner {
         tempInputFile = path.join(process.cwd(), 'models', `temp_input_${Date.now()}.json`);
         
         // Prepare model input configuration
-        const categoryName = this.modelInfo?.category?.name || this.modelInfo?.type || 'TEXT_CLASSIFICATION';
-        const modelConfig = {
+        const categoryName = this.resolveModelType() || 'text_classification';
+        const runtimeConfig = { ...(this.modelInfo?.config || {}) };
+        if (categoryName.includes('image') && typeof runtimeConfig.flatten === 'undefined') {
+          runtimeConfig.flatten = false;
+        }
+        const modelPayload = {
           input: inputData,
           modelType: String(categoryName).toLowerCase(),
-          modelConfig: this.modelInfo?.config || {}
+          modelConfig: runtimeConfig
         };
         
-        await fs.writeFile(tempInputFile, JSON.stringify(modelConfig, null, 2));
+        await fs.writeFile(tempInputFile, JSON.stringify(modelPayload, null, 2));
         options.args = [this.modelPath, tempInputFile];
         
         logger.info('Running model with options:', {
           modelPath: this.modelPath,
-          modelType: modelConfig.modelType,
+          modelType: modelPayload.modelType,
           pythonPath: this.pythonPath
         });
 

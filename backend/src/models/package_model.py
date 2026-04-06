@@ -116,7 +116,7 @@ if __name__ == "__main__":
     parser.add_argument('--name', required=True, help='Model name')
     parser.add_argument('--description', required=True, help='Model description')
     parser.add_argument('--model-type', required=True, choices=['text_classification', 'image_classification', 'sentiment_analysis', 'regression', 'other'], help='Type of model')
-    parser.add_argument('--framework', required=True, choices=['pytorch', 'tensorflow', 'sklearn', 'other'], help='ML framework used')
+    parser.add_argument('--framework', required=True, choices=['pytorch', 'tensorflow', 'sklearn', 'onnx', 'other'], help='ML framework used')
     
     # Optional arguments
     parser.add_argument('--input-format', help='Description of expected input format')

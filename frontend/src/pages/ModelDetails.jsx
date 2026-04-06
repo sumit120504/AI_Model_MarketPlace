@@ -22,6 +22,13 @@ function ModelDetails() {
   const [startTime, setStartTime] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [progressInfo, setProgressInfo] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+
+  const isImageModel = (() => {
+    if (!model) return false;
+    const category = getCategoryName(model.category);
+    return String(category).toLowerCase().includes('image');
+  })();
 
   useEffect(() => {
     if (isConnected && id) {
@@ -75,9 +82,28 @@ function ModelDetails() {
     }
   }
 
-   async function handleInference() {
+  function handleImageInput(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select a valid image file');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      setInputText(dataUrl);
+      setImagePreview(dataUrl);
+    };
+    reader.onerror = () => toast.error('Failed to read selected image');
+    reader.readAsDataURL(file);
+  }
+
+  async function handleInference() {
     if (!inputText.trim()) {
-      toast.error('Please enter some text');
+      toast.error(isImageModel ? 'Please upload an image' : 'Please enter some text');
       return;
     }
 
@@ -653,15 +679,34 @@ function ModelDetails() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-2">
-              Input Text (Email to check for spam)
+              {isImageModel ? 'Upload Image' : 'Input Text'}
             </label>
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              placeholder="Enter email text here..."
-              className="input min-h-[120px] resize-none"
-              disabled={processing}
-            />
+            {isImageModel ? (
+              <div className="space-y-3">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageInput}
+                  className="input"
+                  disabled={processing}
+                />
+                {imagePreview && (
+                  <img
+                    src={imagePreview}
+                    alt="Uploaded preview"
+                    className="w-full max-h-80 object-contain rounded-lg border border-gray-800 bg-gray-900"
+                  />
+                )}
+              </div>
+            ) : (
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Enter text input..."
+                className="input min-h-[120px] resize-none"
+                disabled={processing}
+              />
+            )}
           </div>
 
           <button
@@ -772,6 +817,7 @@ function ModelDetails() {
       </div>
 
       {/* Sample Inputs */}
+      {!isImageModel && (
       <div className="card">
         <h3 className="text-lg font-bold mb-4">Sample Inputs to Try</h3>
         <div className="space-y-2">
@@ -790,6 +836,7 @@ function ModelDetails() {
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }

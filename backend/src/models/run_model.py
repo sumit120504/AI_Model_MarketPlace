@@ -8,13 +8,17 @@ Input is provided via a JSON file with fields:
 
 import base64
 import json
+import math
+import os
 import pickle
 import re
 import sys
+import tempfile
 import traceback
 import warnings
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -28,24 +32,99 @@ try:
 except Exception:
     InconsistentVersionWarning = UserWarning
 
+try:
+    import onnxruntime as ort
+except Exception:
+    ort = None
+
 
 def _safe_print(msg: str) -> None:
     print(msg, flush=True)
 
 
-def load_model(model_path: str) -> Any:
+def _read_json_if_exists(path: Path) -> Dict[str, Any]:
+    try:
+        if path.exists() and path.is_file():
+            with open(path, "r", encoding="utf-8") as f:
+                parsed = json.load(f)
+                if isinstance(parsed, dict):
+                    return parsed
+    except Exception:
+        return {}
+    return {}
+
+
+def _find_first_file(base_dir: Path, suffixes: List[str]) -> Optional[Path]:
+    for candidate in base_dir.rglob("*"):
+        if candidate.is_file() and candidate.suffix.lower() in suffixes:
+            return candidate
+    return None
+
+
+def _resolve_artifact(model_path: str) -> Tuple[Path, Dict[str, Any], Optional[str]]:
     path = Path(model_path)
     if not path.exists():
         raise ValueError(f"Model file not found: {model_path}")
     if path.stat().st_size == 0:
         raise ValueError(f"Model file is empty: {model_path}")
 
+    metadata = {}
+
+    # Sidecar metadata next to a direct model file.
+    parent = path.parent
+    metadata = _read_json_if_exists(parent / "metadata.json")
+    if not metadata:
+        metadata = _read_json_if_exists(parent / "model_metadata.json")
+
+    # If uploaded artifact is a zip bundle, extract and locate model + metadata.
+    if zipfile.is_zipfile(str(path)):
+        temp_dir = tempfile.mkdtemp(prefix="ai_marketplace_bundle_")
+        with zipfile.ZipFile(path, "r") as zf:
+            zf.extractall(temp_dir)
+
+        extracted_root = Path(temp_dir)
+        metadata = _read_json_if_exists(extracted_root / "metadata.json")
+        if not metadata:
+            metadata = _read_json_if_exists(extracted_root / "model_metadata.json")
+
+        model_candidate = _find_first_file(extracted_root, [".onnx", ".pkl", ".pickle"])
+        if model_candidate is None:
+            raise ValueError("Zip bundle did not contain a supported model file (.onnx/.pkl/.pickle)")
+
+        return model_candidate, metadata, temp_dir
+
+    return path, metadata, None
+
+
+def load_model(model_path: str) -> Dict[str, Any]:
+    resolved_path, metadata, extraction_dir = _resolve_artifact(model_path)
+    ext = resolved_path.suffix.lower()
+
+    if ext == ".onnx":
+        if ort is None:
+            raise RuntimeError("onnxruntime is not installed")
+
+        session = ort.InferenceSession(str(resolved_path), providers=["CPUExecutionProvider"])
+        return {
+            "kind": "onnx",
+            "model": session,
+            "metadata": metadata,
+            "model_path": str(resolved_path),
+            "cleanup_dir": extraction_dir,
+        }
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", InconsistentVersionWarning)
-        with open(model_path, "rb") as f:
+        with open(resolved_path, "rb") as f:
             model = pickle.load(f)
 
-    return model
+    return {
+        "kind": "pickle",
+        "model": model,
+        "metadata": metadata,
+        "model_path": str(resolved_path),
+        "cleanup_dir": extraction_dir,
+    }
 
 
 def _read_image_from_path(path_str: str) -> np.ndarray:
@@ -126,12 +205,176 @@ def _label_from_prediction(pred: Any) -> str:
     return str(pred)
 
 
-def run_inference(model: Any, normalized_input: Any) -> Dict[str, Any]:
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    shifted = logits - np.max(logits)
+    exps = np.exp(shifted)
+    denom = np.sum(exps)
+    if denom <= 0:
+        return np.ones_like(exps) / max(1, exps.shape[0])
+    return exps / denom
+
+
+def _extract_label_list(model_metadata: Dict[str, Any], model_config: Dict[str, Any]) -> List[str]:
+    # Common layouts we support:
+    # {"labels": [...]}
+    # {"config": {"labels": [...]}}
+    # {"class_names": [...]} or modelConfig.labels
+    candidates = []
+    if isinstance(model_config, dict):
+        candidates.append(model_config.get("labels"))
+    if isinstance(model_metadata, dict):
+        candidates.append(model_metadata.get("labels"))
+        cfg = model_metadata.get("config")
+        if isinstance(cfg, dict):
+            candidates.append(cfg.get("labels"))
+        candidates.append(model_metadata.get("class_names"))
+
+    for item in candidates:
+        if isinstance(item, list) and item:
+            return [str(x) for x in item]
+    return []
+
+
+def _read_input_size(model_metadata: Dict[str, Any], model_config: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    # priority: request modelConfig.imageSize -> metadata.input_size -> metadata.config.input_size
+    size = None
+    if isinstance(model_config, dict):
+        size = model_config.get("imageSize")
+    if size is None and isinstance(model_metadata, dict):
+        size = model_metadata.get("input_size")
+        if size is None and isinstance(model_metadata.get("config"), dict):
+            size = model_metadata["config"].get("input_size")
+
+    if isinstance(size, str) and "x" in size:
+        parts = size.lower().split("x")
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return int(parts[0]), int(parts[1])
+
+    if isinstance(size, (list, tuple)) and len(size) >= 2:
+        try:
+            return int(size[0]), int(size[1])
+        except Exception:
+            return None
+    return None
+
+
+def _prepare_onnx_image_input(
+    raw_input: Any,
+    input_shape: List[Any],
+    model_metadata: Dict[str, Any],
+    model_config: Dict[str, Any],
+) -> np.ndarray:
+    image = normalize_input(raw_input, "image_classification", {"flatten": False})
+
+    # normalize_input returns N,H,W,C for image branch when flatten=False.
+    if isinstance(image, np.ndarray) and image.ndim == 4:
+        image = image[0]
+
+    if not isinstance(image, np.ndarray):
+        raise ValueError("Image preprocessing failed: expected numpy array")
+
+    target = _read_input_size(model_metadata, model_config)
+    if target and cv2 is not None:
+        image = cv2.resize(image, (int(target[0]), int(target[1])))
+
+    # Infer channel ordering from ONNX input shape if possible.
+    # Typical expected input shape: [N, C, H, W] or [N, H, W, C].
+    channels_first = True
+    if len(input_shape) >= 4:
+        # Prefer NHWC only when shape clearly indicates channel in last dim.
+        last_dim = input_shape[-1]
+        if isinstance(last_dim, int) and last_dim in (1, 3):
+            channels_first = False
+
+    arr = image.astype(np.float32)
+    if np.max(arr) > 1.0:
+        arr = arr / 255.0
+
+    if arr.ndim == 2:
+        arr = np.expand_dims(arr, axis=-1)
+
+    if channels_first:
+        if arr.ndim == 3:
+            arr = np.transpose(arr, (2, 0, 1))
+        arr = np.expand_dims(arr, axis=0)
+    else:
+        arr = np.expand_dims(arr, axis=0)
+
+    return arr.astype(np.float32)
+
+
+def _run_onnx_inference(
+    session: Any,
+    raw_input: Any,
+    model_metadata: Dict[str, Any],
+    model_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    if ort is None:
+        raise RuntimeError("onnxruntime is not installed")
+
+    inputs = session.get_inputs()
+    if not inputs:
+        raise RuntimeError("ONNX model has no input tensors")
+
+    input_meta = inputs[0]
+    tensor = _prepare_onnx_image_input(raw_input, list(input_meta.shape), model_metadata, model_config)
+    outputs = session.run(None, {input_meta.name: tensor})
+    if not outputs:
+        raise RuntimeError("ONNX model returned no outputs")
+
+    raw = np.asarray(outputs[0])
+    if raw.ndim == 0:
+        raw = raw.reshape(1)
+    if raw.ndim > 1:
+        raw = raw[0]
+
+    logits = raw.astype(float)
+
+    # If output already looks like probabilities, keep it; otherwise softmax.
+    if np.all(logits >= 0.0) and np.all(logits <= 1.0) and math.isclose(float(np.sum(logits)), 1.0, rel_tol=1e-3, abs_tol=1e-3):
+        probs = logits
+    else:
+        probs = _softmax(logits)
+
+    pred_idx = int(np.argmax(probs))
+    labels = _extract_label_list(model_metadata, model_config)
+    label = labels[pred_idx] if pred_idx < len(labels) else str(pred_idx)
+
+    prob_map: Dict[str, float] = {}
+    for idx, prob in enumerate(probs):
+        key = labels[idx] if idx < len(labels) else str(idx)
+        prob_map[str(key)] = float(prob)
+
+    return {
+        "label": str(label),
+        "confidence": float(probs[pred_idx]),
+        "probabilities": prob_map,
+        "metadata": {
+            "runtime": "onnxruntime",
+            "input_tensor": input_meta.name,
+            "model_path": model_metadata.get("model_path") if isinstance(model_metadata, dict) else None,
+        },
+    }
+
+
+def run_inference(
+    loaded_model: Dict[str, Any],
+    raw_input: Any,
+    normalized_input: Any,
+    model_config: Dict[str, Any],
+) -> Dict[str, Any]:
     output: Dict[str, Any] = {
         "label": "UNKNOWN",
         "confidence": 1.0,
         "probabilities": {},
     }
+
+    runtime = loaded_model.get("kind")
+    model = loaded_model.get("model")
+    metadata = loaded_model.get("metadata") or {}
+
+    if runtime == "onnx":
+        return _run_onnx_inference(model, raw_input, metadata, model_config)
 
     # Support serialized bundle format: {'vectorizer': ..., 'model': ...}
     if isinstance(model, dict) and "model" in model:
@@ -222,7 +465,7 @@ def main() -> None:
 
         model = load_model(model_path)
         normalized_input = normalize_input(raw_input, model_type, model_config)
-        result = run_inference(model, normalized_input)
+        result = run_inference(model, raw_input, normalized_input, model_config)
 
         _safe_print(json.dumps({"success": True, "output": result}))
 
@@ -237,6 +480,30 @@ def main() -> None:
             )
         )
         sys.exit(1)
+    finally:
+        # Clean up extracted zip bundle files, if any.
+        try:
+            cleanup_dir = None
+            if "model" in locals() and isinstance(model, dict):
+                cleanup_dir = model.get("cleanup_dir")
+            if cleanup_dir and os.path.isdir(cleanup_dir):
+                for root, dirs, files in os.walk(cleanup_dir, topdown=False):
+                    for name in files:
+                        try:
+                            os.remove(os.path.join(root, name))
+                        except Exception:
+                            pass
+                    for name in dirs:
+                        try:
+                            os.rmdir(os.path.join(root, name))
+                        except Exception:
+                            pass
+                try:
+                    os.rmdir(cleanup_dir)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
