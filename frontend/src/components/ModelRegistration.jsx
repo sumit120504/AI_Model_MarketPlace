@@ -125,8 +125,8 @@ function ModelRegistration({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-gray-900 rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/55 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="glass rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-cyan-300/20">
         <div className="p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
@@ -143,7 +143,7 @@ function ModelRegistration({ isOpen, onClose }) {
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Model Name */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-slate-200 mb-2">
                 Model Name *
               </label>
               <input
@@ -159,7 +159,7 @@ function ModelRegistration({ isOpen, onClose }) {
 
             {/* Description */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-slate-200 mb-2">
                 Description *
               </label>
               <textarea
@@ -174,7 +174,7 @@ function ModelRegistration({ isOpen, onClose }) {
 
             {/* Category */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-slate-200 mb-2">
                 Category *
               </label>
               <select
@@ -195,7 +195,7 @@ function ModelRegistration({ isOpen, onClose }) {
             {/* Price and Stake */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-200 mb-2">
                   Price per Inference (MATIC) *
                 </label>
                 <input
@@ -212,7 +212,7 @@ function ModelRegistration({ isOpen, onClose }) {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="block text-sm font-medium text-slate-200 mb-2">
                   Stake Amount (MATIC) *
                 </label>
                 <input
@@ -231,7 +231,7 @@ function ModelRegistration({ isOpen, onClose }) {
 
             {/* IPFS Hash */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
+              <label className="block text-sm font-medium text-slate-200 mb-2">
                 Model File Upload (IPFS) *
               </label>
               <div className="flex flex-col md:flex-row md:space-x-2 space-y-2 md:space-y-0">
@@ -264,7 +264,7 @@ function ModelRegistration({ isOpen, onClose }) {
                   <span>{isUploading ? 'Uploading...' : 'Upload'}</span>
                 </button>
               </div>
-              <p className="text-xs text-gray-400 mt-1">
+              <p className="text-xs text-slate-400 mt-1">
                 Upload your model file. The IPFS hash will be filled automatically.<br/>
                 Or paste an existing IPFS hash above.
               </p>

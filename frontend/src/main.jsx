@@ -14,9 +14,11 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         toastOptions={{
           duration: 4000,
           style: {
-            background: '#1f2937',
-            color: '#f3f4f6',
-            border: '1px solid #374151',
+            background: 'rgba(14, 24, 43, 0.92)',
+            color: '#eef5ff',
+            border: '1px solid rgba(34, 211, 238, 0.25)',
+            borderRadius: '12px',
+            backdropFilter: 'blur(10px)',
           },
           success: {
             iconTheme: {

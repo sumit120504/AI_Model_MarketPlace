@@ -124,9 +124,9 @@ function Dashboard() {
   return (
     <div className="max-w-7xl mx-auto space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold mb-2">Dashboard</h1>
-        <p className="text-gray-400">
+      <div className="card">
+        <h1 className="text-3xl md:text-4xl font-bold mb-2">Dashboard</h1>
+        <p className="text-slate-300">
           View your inference requests and manage your models
         </p>
       </div>
@@ -134,16 +134,16 @@ function Dashboard() {
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="card">
-          <div className="text-gray-400 text-sm mb-2">Total Requests</div>
+          <div className="text-slate-400 text-sm mb-2">Total Requests</div>
           <div className="text-3xl font-bold">{requests.length}</div>
         </div>
         <div className="card">
-          <div className="text-gray-400 text-sm mb-2">My Models</div>
+          <div className="text-slate-400 text-sm mb-2">My Models</div>
           <div className="text-3xl font-bold">{myModels.length}</div>
         </div>
         <div className="card">
-          <div className="text-gray-400 text-sm mb-2">Total Spent</div>
-          <div className="text-3xl font-bold text-primary-400">
+          <div className="text-slate-400 text-sm mb-2">Total Spent</div>
+          <div className="text-3xl font-bold text-cyan-300">
             {requests.reduce((sum, req) => sum + parseFloat(req.payment), 0).toFixed(4)} MATIC
           </div>
         </div>
@@ -152,7 +152,7 @@ function Dashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="card flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-1">Creator Claimable Earnings</div>
+            <div className="text-slate-400 text-sm mb-1">Creator Claimable Earnings</div>
             <div className="text-2xl font-bold text-green-400">
               {parseFloat(creatorEarnings || '0').toFixed(4)} MATIC
             </div>
@@ -172,7 +172,7 @@ function Dashboard() {
 
         <div className="card flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-1">Refundable Balance</div>
+            <div className="text-slate-400 text-sm mb-1">Refundable Balance</div>
             <div className="text-2xl font-bold text-yellow-400">
               {parseFloat(refundableBalance || '0').toFixed(4)} MATIC
             </div>
@@ -197,7 +197,7 @@ function Dashboard() {
           className={`pb-4 px-2 font-medium transition-colors relative ${
             activeTab === 'requests'
               ? 'text-primary-500'
-              : 'text-gray-400 hover:text-white'
+                : 'text-slate-400 hover:text-white'
           }`}
         >
           <div className="flex items-center space-x-2">
@@ -214,7 +214,7 @@ function Dashboard() {
           className={`pb-4 px-2 font-medium transition-colors relative ${
             activeTab === 'models'
               ? 'text-primary-500'
-              : 'text-gray-400 hover:text-white'
+                : 'text-slate-400 hover:text-white'
           }`}
         >
           <div className="flex items-center space-x-2">

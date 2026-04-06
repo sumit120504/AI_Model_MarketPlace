@@ -55,9 +55,9 @@ function AdminPanel() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold mb-2">Admin Panel</h1>
-        <p className="text-gray-400">Owner controls for node authorization and economic parameters.</p>
+      <div className="card">
+        <h1 className="text-3xl md:text-4xl font-bold mb-2">Admin Panel</h1>
+        <p className="text-slate-300">Owner controls for node authorization and economic parameters.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

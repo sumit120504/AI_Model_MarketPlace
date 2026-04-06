@@ -11,12 +11,14 @@ function Navbar() {
   };
 
   return (
-    <nav className="bg-gray-900 border-b border-gray-800">
+    <nav className="sticky top-0 z-30 border-b border-white/10 bg-[#0a1325]/70 backdrop-blur-xl">
       <div className="container mx-auto px-4">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <Link to="/" className="flex items-center space-x-2">
-            <Activity className="h-8 w-8 text-primary-500" />
+            <div className="h-9 w-9 rounded-xl bg-cyan-400/10 border border-cyan-300/30 grid place-items-center">
+              <Activity className="h-5 w-5 text-cyan-300" />
+            </div>
             <span className="text-xl font-bold gradient-text">
               AI Marketplace
             </span>
@@ -26,26 +28,26 @@ function Navbar() {
           <div className="hidden md:flex items-center space-x-8">
             <Link
               to="/"
-              className="text-gray-300 hover:text-white transition-colors"
+              className="text-slate-300 hover:text-cyan-200 transition-colors"
             >
               Home
             </Link>
             <Link
               to="/marketplace"
-              className="text-gray-300 hover:text-white transition-colors"
+              className="text-slate-300 hover:text-cyan-200 transition-colors"
             >
               Marketplace
             </Link>
             <Link
               to="/dashboard"
-              className="text-gray-300 hover:text-white transition-colors"
+              className="text-slate-300 hover:text-cyan-200 transition-colors"
             >
               Dashboard
             </Link>
             {isConnected && (
               <Link
                 to="/compute"
-                className="text-gray-300 hover:text-white transition-colors"
+                className="text-slate-300 hover:text-cyan-200 transition-colors"
               >
                 Compute
               </Link>
@@ -53,7 +55,7 @@ function Navbar() {
             {isAdmin && (
               <Link
                 to="/admin"
-                className="text-gray-300 hover:text-white transition-colors"
+                className="text-slate-300 hover:text-cyan-200 transition-colors"
               >
                 Admin
               </Link>
@@ -65,20 +67,20 @@ function Navbar() {
             {isConnected ? (
               <>
                 <div className="hidden md:block text-sm">
-                  <div className="text-gray-400">Balance</div>
-                  <div className="text-white font-medium">
+                  <div className="text-slate-400">Balance</div>
+                  <div className="text-slate-100 font-medium">
                     {parseFloat(balance).toFixed(4)} MATIC
                   </div>
                 </div>
-                <div className="flex items-center space-x-2 bg-gray-800 px-4 py-2 rounded-lg">
+                <div className="flex items-center space-x-2 bg-[#12213a]/80 px-4 py-2 rounded-xl border border-slate-600/50">
                   <div className="h-2 w-2 bg-green-500 rounded-full"></div>
-                  <span className="text-white font-medium">
+                  <span className="text-slate-100 font-medium">
                     {formatAddress(account)}
                   </span>
                 </div>
                 <button
                   onClick={disconnectWallet}
-                  className="p-2 text-gray-400 hover:text-white transition-colors"
+                  className="p-2 text-slate-400 hover:text-white transition-colors"
                   title="Disconnect"
                 >
                   <LogOut className="h-5 w-5" />

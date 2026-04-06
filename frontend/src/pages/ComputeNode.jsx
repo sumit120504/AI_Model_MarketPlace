@@ -103,10 +103,10 @@ function ComputeNode() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="card flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold mb-2">Compute Node Interface</h1>
-          <p className="text-gray-400">Monitor pending jobs, pick requests, and manage node earnings.</p>
+          <p className="text-slate-300">Monitor pending jobs, pick requests, and manage node earnings.</p>
         </div>
         <button
           className="btn-secondary flex items-center gap-2"
@@ -120,20 +120,20 @@ function ComputeNode() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="card">
-          <div className="text-gray-400 text-sm mb-2">Node Status</div>
+          <div className="text-slate-400 text-sm mb-2">Node Status</div>
           <div className="text-xl font-bold text-green-400 flex items-center gap-2">
             <CheckCircle2 className="h-5 w-5" />
             Authorized
           </div>
         </div>
         <div className="card">
-          <div className="text-gray-400 text-sm mb-2">Pending Queue</div>
+          <div className="text-slate-400 text-sm mb-2">Pending Queue</div>
           <div className="text-3xl font-bold">{pendingRequests.length}</div>
         </div>
         <div className="card flex items-center justify-between">
           <div>
-            <div className="text-gray-400 text-sm mb-2">Node Earnings</div>
-            <div className="text-2xl font-bold text-primary-400">
+            <div className="text-slate-400 text-sm mb-2">Node Earnings</div>
+            <div className="text-2xl font-bold text-cyan-300">
               {parseFloat(nodeEarnings || '0').toFixed(4)} MATIC
             </div>
           </div>
