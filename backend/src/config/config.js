@@ -44,6 +44,10 @@ const config = {
   ipfsGateway: process.env.IPFS_GATEWAY || 'https://gateway.pinata.cloud/ipfs',
   ipfsApiKey: process.env.PINATA_API_KEY,
   ipfsSecretKey: process.env.PINATA_SECRET_KEY,
+
+  // Model artifact protection
+  enableModelEncryption: process.env.ENABLE_MODEL_ENCRYPTION !== 'false',
+  modelEncryptionKey: process.env.MODEL_ENCRYPTION_KEY,
   
   // Gas
   gasLimit: parseInt(process.env.GAS_LIMIT) || 1000000, // Increased default gas limit to 1M

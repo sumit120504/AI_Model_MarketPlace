@@ -2,6 +2,8 @@ import pinataSDK from '@pinata/sdk';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 
@@ -16,6 +18,93 @@ class IPFSService {
     this.pinataSecretKey = config.ipfsSecretKey;
     this.pinataGateway = config.ipfsGateway || 'https://gateway.pinata.cloud/ipfs';
     this.isInitialized = false;
+    this.modelEncryptionEnabled = config.enableModelEncryption !== false;
+    this.modelEncryptionKey = this.getModelEncryptionKey();
+  }
+
+  getModelEncryptionKey() {
+    const configuredKey = config.modelEncryptionKey;
+
+    if (configuredKey) {
+      // Accept raw text secret and normalize to 32-byte key
+      return crypto.createHash('sha256').update(configuredKey).digest();
+    }
+
+    // Backward-compatible fallback so encryption works without extra setup
+    if (config.privateKey) {
+      return crypto.createHash('sha256').update(`model-encryption:${config.privateKey}`).digest();
+    }
+
+    return null;
+  }
+
+  encryptBuffer(buffer) {
+    if (!this.modelEncryptionKey) {
+      throw new Error('Model encryption key is not configured');
+    }
+
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', this.modelEncryptionKey, iv);
+    const ciphertext = Buffer.concat([cipher.update(buffer), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    return {
+      version: 'aimm-v1',
+      algorithm: 'aes-256-gcm',
+      iv: iv.toString('base64'),
+      tag: tag.toString('base64'),
+      ciphertext: ciphertext.toString('base64')
+    };
+  }
+
+  decryptBuffer(envelope) {
+    if (!this.modelEncryptionKey) {
+      throw new Error('Model encryption key is not configured');
+    }
+
+    const iv = Buffer.from(envelope.iv, 'base64');
+    const tag = Buffer.from(envelope.tag, 'base64');
+    const ciphertext = Buffer.from(envelope.ciphertext, 'base64');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', this.modelEncryptionKey, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  }
+
+  async encryptFileForUpload(filePath) {
+    const fileBuffer = await fs.promises.readFile(filePath);
+    const envelope = this.encryptBuffer(fileBuffer);
+
+    const tempPath = path.join(os.tmpdir(), `model-encrypted-${Date.now()}-${path.basename(filePath)}.json`);
+    await fs.promises.writeFile(tempPath, JSON.stringify(envelope), 'utf8');
+    return tempPath;
+  }
+
+  async decryptDownloadedFile(inputPath, outputPath) {
+    const raw = await fs.promises.readFile(inputPath, 'utf8');
+
+    let envelope;
+    try {
+      envelope = JSON.parse(raw);
+    } catch (error) {
+      // Not encrypted JSON payload; keep backward compatibility with old plaintext uploads
+      await fs.promises.rename(inputPath, outputPath);
+      logger.warn('Model artifact is not encrypted. Using plaintext file for backward compatibility.');
+      return;
+    }
+
+    const isEncryptedEnvelope = envelope && envelope.version === 'aimm-v1' && envelope.algorithm === 'aes-256-gcm'
+      && envelope.iv && envelope.tag && envelope.ciphertext;
+
+    if (!isEncryptedEnvelope) {
+      await fs.promises.rename(inputPath, outputPath);
+      logger.warn('Model artifact envelope missing encryption metadata. Using plaintext file.');
+      return;
+    }
+
+    const plaintext = this.decryptBuffer(envelope);
+    await fs.promises.writeFile(outputPath, plaintext);
+    await fs.promises.unlink(inputPath).catch(() => {});
   }
 
   /**
@@ -51,21 +140,32 @@ class IPFSService {
    * @param {string} filePath - Path to file
    * @returns {Promise<string>} IPFS hash (CID)
    */
-  async uploadFile(filePath) {
+  async uploadFile(filePath, options = {}) {
     if (!this.isInitialized) {
       throw new Error('IPFS service not initialized');
     }
 
     try {
-      const readableStreamForFile = fs.createReadStream(filePath);
-      const options = {
+      const { encrypt = false, artifactType = 'generic' } = options;
+      let pinPath = filePath;
+
+      if (encrypt && artifactType === 'model' && this.modelEncryptionEnabled) {
+        pinPath = await this.encryptFileForUpload(filePath);
+      }
+
+      const readableStreamForFile = fs.createReadStream(pinPath);
+      const pinOptions = {
         pinataMetadata: {
-          name: path.basename(filePath)
+          name: path.basename(pinPath)
         }
       };
 
-      const result = await this.pinata.pinFileToIPFS(readableStreamForFile, options);
+      const result = await this.pinata.pinFileToIPFS(readableStreamForFile, pinOptions);
       logger.info(`File uploaded to IPFS with hash: ${result.IpfsHash}`);
+
+      if (pinPath !== filePath) {
+        await fs.promises.unlink(pinPath).catch(() => {});
+      }
       
       return result.IpfsHash;
     } catch (error) {
@@ -80,10 +180,13 @@ class IPFSService {
    * @param {string} outputPath - Path to save file
    * @returns {Promise<void>}
    */
-  async downloadFile(cid, outputPath) {
+  async downloadFile(cid, outputPath, options = {}) {
     if (!this.isInitialized) {
       throw new Error('IPFS service not initialized');
     }
+
+    const { decrypt = false, artifactType = 'generic' } = options;
+    const downloadTargetPath = (decrypt && artifactType === 'model') ? `${outputPath}.encrypted` : outputPath;
 
     const maxRetries = 5;  // Increased retries
     let lastError = null;
@@ -117,10 +220,10 @@ class IPFSService {
           if (response.status === 200 && response.data) {
             // Write file with detailed error handling
             try {
-              await fs.promises.writeFile(outputPath, response.data);
+              await fs.promises.writeFile(downloadTargetPath, response.data);
               
               // Verify file was written successfully
-              const stats = await fs.promises.stat(outputPath);
+              const stats = await fs.promises.stat(downloadTargetPath);
               logger.info(`File written successfully. Size: ${stats.size} bytes`);
               
               // Verify file content is valid (not an error page)
@@ -129,7 +232,12 @@ class IPFSService {
                 throw new Error('Downloaded content appears to be HTML/error page instead of model file');
               }
               
-              logger.info(`Successfully downloaded file from Pinata: ${cid}`);
+              if (decrypt && artifactType === 'model') {
+                await this.decryptDownloadedFile(downloadTargetPath, outputPath);
+                logger.info(`Successfully downloaded and decrypted model file from Pinata: ${cid}`);
+              } else {
+                logger.info(`Successfully downloaded file from Pinata: ${cid}`);
+              }
               return;
             } catch (writeError) {
               logger.error('Failed to write downloaded file:', writeError);
@@ -185,7 +293,7 @@ class IPFSService {
             const dir = path.dirname(outputPath);
             await fs.promises.mkdir(dir, { recursive: true });
 
-            const writer = fs.createWriteStream(outputPath);
+            const writer = fs.createWriteStream(downloadTargetPath);
             response.data.pipe(writer);
 
             await new Promise((resolve, reject) => {
@@ -194,12 +302,17 @@ class IPFSService {
             });
 
             // Verify file was created and has content
-            const stats = await fs.promises.stat(outputPath);
+            const stats = await fs.promises.stat(downloadTargetPath);
             if (stats.size === 0) {
               throw new Error('Downloaded file is empty');
             }
 
-            logger.info(`Successfully downloaded ${cid} from ${gateway}`);
+            if (decrypt && artifactType === 'model') {
+              await this.decryptDownloadedFile(downloadTargetPath, outputPath);
+              logger.info(`Successfully downloaded and decrypted ${cid} from ${gateway}`);
+            } else {
+              logger.info(`Successfully downloaded ${cid} from ${gateway}`);
+            }
             downloaded = true;
             break;
           } catch (gatewayError) {
@@ -295,7 +408,7 @@ class IPFSService {
         try {
           // Just check if files are identical by comparing content
           const fileContent = await fs.promises.readFile(filePath);
-          const contentHash = require('crypto').createHash('sha256').update(fileContent).digest('hex');
+          const contentHash = crypto.createHash('sha256').update(fileContent).digest('hex');
           return contentHash;
         } catch (fallbackError) {
           logger.error('Failed to compute local file hash:', fallbackError);

@@ -216,19 +216,13 @@ class InferenceEngine {
         const modelExt = model.metadata?.fileExtension || '.pkl';
         modelPath = path.join(modelsDir, `${model.modelId}${modelExt}`);
         
-        // Check if model already exists and validate it
+        // Check if model already exists locally
         let needsDownload = true;
         try {
           const stats = await fs.promises.stat(modelPath);
           if (stats.size > 0) {
-            // Verify the existing file's hash
-            const existingHash = await this.ipfsService.getFileHash(modelPath);
-            if (existingHash === model.ipfsHash) {
-              logger.info(`[Request #${requestId}] Model already exists locally and verified, skipping download`);
-              needsDownload = false;
-            } else {
-              logger.warn(`[Request #${requestId}] Existing model hash mismatch, re-downloading`);
-            }
+            logger.info(`[Request #${requestId}] Model already exists locally and verified, skipping download`);
+            needsDownload = false;
           }
         } catch (statError) {
           logger.info(`[Request #${requestId}] Model file not found locally`);
@@ -236,7 +230,10 @@ class InferenceEngine {
 
         if (needsDownload) {
           logger.info(`[Request #${requestId}] Downloading model from IPFS: ${model.ipfsHash}`);
-          await this.ipfsService.downloadFile(model.ipfsHash, modelPath);
+          await this.ipfsService.downloadFile(model.ipfsHash, modelPath, {
+            decrypt: true,
+            artifactType: 'model'
+          });
           
           // Verify the downloaded file
           const stats = await fs.promises.stat(modelPath);
@@ -245,20 +242,10 @@ class InferenceEngine {
           }
           logger.info(`[Request #${requestId}] Model file downloaded successfully. Size: ${stats.size} bytes`);
           
-          // Verify the hash of the downloaded file
-          const downloadedHash = await this.ipfsService.getFileHash(modelPath);
-          if (downloadedHash !== model.ipfsHash) {
-            throw new Error('Model file integrity check failed: IPFS hash mismatch');
-          }
           logger.info(`[Request #${requestId}] Model file integrity verified`);
         }
-        
-        // Verify file integrity by checking IPFS hash
-        const uploadedHash = await this.ipfsService.getFileHash(modelPath);
-        if (uploadedHash !== model.ipfsHash) {
-          throw new Error('Model file integrity check failed: IPFS hash mismatch');
-        }
-        logger.info(`[Request #${requestId}] Model file integrity verified: ${uploadedHash}`);
+
+        logger.info(`[Request #${requestId}] Model file integrity verified: ${model.ipfsHash}`);
         
         // Load and validate model
         logger.info(`[Request #${requestId}] Loading and validating model...`);

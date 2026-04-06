@@ -83,7 +83,10 @@ class APIServer {
           await this.ipfsService.initialize();
         }
         const filePath = req.file.path;
-        const ipfsHash = await this.ipfsService.uploadFile(filePath);
+        const ipfsHash = await this.ipfsService.uploadFile(filePath, {
+          encrypt: true,
+          artifactType: 'model'
+        });
         // Remove temp file
         fs.unlink(filePath, () => {});
         res.json({ ipfsHash });
@@ -494,7 +497,10 @@ class APIServer {
             await this.ipfsService.initialize();
           }
           const filePath = req.file.path;
-          ipfsHash = await this.ipfsService.uploadFile(filePath);
+          ipfsHash = await this.ipfsService.uploadFile(filePath, {
+            encrypt: true,
+            artifactType: 'model'
+          });
           // remove temp file
           fs.unlink(filePath, () => {});
         }
