@@ -49,6 +49,12 @@ AI_Model_MarketPlace/
 - Backend uses Express.js + Python for model execution
 - Smart contracts use Solidity
 
+## Recent Updates
+
+- Improved project documentation
+- Updated installation instructions
+- Fixed formatting issues
+
 ### Available Commands
 
 Root directory:
